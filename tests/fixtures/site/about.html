@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Northwind Sensors — About</title></head>
+<body>
+  <h1>About Northwind Sensors</h1>
+  <div id="facts">Loading company details…</div>
+  <button id="show-team">Meet the team</button>
+  <div id="team-area"></div>
+  <script>
+    let loaded = null;
+    fetch('/data.json').then(r => r.json()).then(d => {
+      loaded = d;
+      document.getElementById('facts').innerHTML =
+        '<p>Industry: ' + d.industry + '</p>' +
+        '<p>Headcount: ' + d.employees + '</p>' +
+        '<p>Headquarters: ' + d.hq + '</p>' +
+        '<p>Active markets: ' + d.markets + '</p>';
+    });
+    // The team list has no URL of its own: it exists only after this click.
+    document.getElementById('show-team').addEventListener('click', () => {
+      if (!loaded) return;
+      document.getElementById('team-area').innerHTML =
+        '<h2>Leadership</h2><ul>' +
+        loaded.team.map(p => '<li>' + p.name + ' — ' + p.role + '</li>').join('') +
+        '</ul><p>Press enquiries: ' + loaded.press_email + '</p>';
+    });
+  </script>
+</body>
+</html>

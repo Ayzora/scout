@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Northwind Sensors — Home</title></head>
+<body>
+  <div id="cookie-banner" style="padding:8px;background:#eee">
+    <p>We use cookies.</p>
+    <button id="accept">Accept all cookies</button>
+  </div>
+  <h1>Northwind Sensors</h1>
+  <p id="tagline">Loading…</p>
+  <nav>
+    <a href="/about.html">About us</a>
+    <a href="/careers.html">Careers</a>
+    <a href="/blog.html">Blog</a>
+  </nav>
+  <script>
+    // Content arrives from a JSON endpoint, as on most real sites. It appears
+    // nowhere in this file, which is why an HTML scraper cannot see it.
+    fetch('/data.json')
+      .then(r => r.json())
+      .then(d => { document.getElementById('tagline').textContent = d.tagline; });
+    document.getElementById('accept').addEventListener('click', () => {
+      document.getElementById('cookie-banner').remove();
+    });
+  </script>
+</body>
+</html>

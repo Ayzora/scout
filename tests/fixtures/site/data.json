@@ -1,0 +1,12 @@
+{
+  "tagline": "Industrial vibration sensors for automotive production lines.",
+  "industry": "Industrial IoT hardware manufacturing",
+  "employees": "just over 140 people",
+  "hq": "Coventry, United Kingdom",
+  "markets": "United Kingdom, Germany and Poland",
+  "team": [
+    { "name": "Priya Raman", "role": "Chief Executive Officer" },
+    { "name": "Tomasz Nowak", "role": "Head of Operations" }
+  ],
+  "press_email": "press@northwind-sensors.example"
+}
