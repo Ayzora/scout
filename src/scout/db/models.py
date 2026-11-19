@@ -153,12 +153,58 @@ class CompanyRun(Base, TimestampMixin):
     )
 
 
+class Branch(Base, TimestampMixin):
+    """One question researched in its own conversation. These rows are the tree.
+
+    A branch exists so that depth costs linearly instead of quadratically: a single
+    conversation re-reads its whole history every turn, so six short conversations are
+    far cheaper than one six times as long.
+    """
+
+    __tablename__ = "branches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_run_id: Mapped[int] = mapped_column(
+        ForeignKey("company_runs.id", ondelete="CASCADE"), index=True
+    )
+    # Set when this branch was opened to look into something another branch found --
+    # a named person, a subsidiary, an investor.
+    parent_branch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), index=True
+    )
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    question: Mapped[str | None] = mapped_column(Text)
+    depth: Mapped[int] = mapped_column(Integer, default=1)
+
+    status: Mapped[str] = mapped_column(String(32), default=Status.PENDING.value)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    web_searches: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    duration_s: Mapped[float | None] = mapped_column(Float)
+
+    summary: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("depth >= 1", name="ck_branches_depth"),
+    )
+
+
 class Finding(Base, TimestampMixin):
     __tablename__ = "findings"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_run_id: Mapped[int] = mapped_column(
         ForeignKey("company_runs.id"), index=True
+    )
+
+    # Which branch found this, so duplicated effort between branches is visible.
+    branch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("branches.id", ondelete="SET NULL"), index=True
     )
 
     field: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -194,6 +240,10 @@ class Person(Base, TimestampMixin):
         ForeignKey("company_runs.id"), index=True
     )
 
+    branch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("branches.id", ondelete="SET NULL"), index=True
+    )
+
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str | None] = mapped_column(String(255))
     seniority: Mapped[str | None] = mapped_column(String(64))
@@ -226,6 +276,11 @@ class Evidence(Base, TimestampMixin):
     person_id: Mapped[int | None] = mapped_column(ForeignKey("people.id"), index=True)
 
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # 1 registry, 2 the company itself, 3 press, 4 aggregator. Derived from the host
+    # in agent/sources.py rather than asked of the model, so corroboration counts a
+    # property of the source instead of an opinion about it. Null on rows recorded
+    # before tiers existed.
+    source_tier: Mapped[int | None] = mapped_column(Integer)
     page_title: Mapped[str | None] = mapped_column(Text)
     quote: Mapped[str | None] = mapped_column(Text)
     screenshot_path: Mapped[str | None] = mapped_column(Text)
@@ -255,6 +310,10 @@ class Step(Base, TimestampMixin):
         ForeignKey("company_runs.id"), index=True
     )
 
+    # Which branch took this step, so the trace stays readable once a run is a tree.
+    branch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), index=True
+    )
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     tool_name: Mapped[str | None] = mapped_column(String(128))

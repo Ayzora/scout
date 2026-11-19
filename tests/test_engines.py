@@ -136,6 +136,49 @@ def test_fetch_engine_never_launches_a_browser(tmp_path):
         assert browser.page is not None
 
 
+def test_two_branches_do_not_collide_on_step_numbers(tmp_path):
+    """The first bug branching caused, and it failed quietly.
+
+    ``steps.seq`` is unique per company run, but every branch gets its own Recorder.
+    Counters starting from zero in each collided the moment a second branch acted, and
+    because the agent simply retried through other tools the run still reported
+    success while losing findings.
+    """
+    settings = _settings(tmp_path, "browser")
+    reset_engine()
+    init_db(settings)
+    with session_scope(settings) as s:
+        company = m.Company(domain="northwind.example")
+        run = m.Run(model="test", effort="medium", engine="browser")
+        s.add_all([company, run])
+        s.flush()
+        company_run = m.CompanyRun(run_id=run.id, company_id=company.id)
+        s.add(company_run)
+        s.flush()
+        company_run_id = company_run.id
+
+    # Two branches, two recorders, same company run -- exactly the live arrangement.
+    first = Recorder(settings=settings, company_run_id=company_run_id, branch_id=None)
+    second = Recorder(settings=settings, company_run_id=company_run_id, branch_id=None)
+    for _ in range(3):
+        first.log_step(step_type="message", tool_name="a")
+    for _ in range(3):
+        second.log_step(step_type="message", tool_name="b")
+    # A third recorder joining later must also continue the sequence.
+    third = Recorder(settings=settings, company_run_id=company_run_id, branch_id=None)
+    third.log_step(step_type="message", tool_name="c")
+
+    with session_scope(settings) as s:
+        seqs = [
+            row.seq
+            for row in s.query(m.Step)
+            .filter(m.Step.company_run_id == company_run_id)
+            .order_by(m.Step.seq)
+            .all()
+        ]
+    assert seqs == [1, 2, 3, 4, 5, 6, 7], seqs
+
+
 def test_server_tools_are_capped(tmp_path):
     """An uncapped web_fetch would make the fetch engine look expensive unfairly."""
     fetch_tool = next(t for t in SERVER_TOOLS if t["name"] == "web_fetch")

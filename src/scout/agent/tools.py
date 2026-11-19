@@ -23,8 +23,12 @@ from scout.agent.recorder import Recorder
 from scout.browser.session import BrowserSession, PageView
 from scout.config import Settings
 
-WEB_SEARCH_MAX_USES = 8
-WEB_FETCH_MAX_USES = 8
+# Per branch, not per company. Searches are billed per request ($10 per 1,000), which
+# was rounding error on an expensive model and is a material share of the bill on a
+# cheap one -- so with several branches the per-branch allowance has to come down or
+# search becomes the largest line in a deep run.
+WEB_SEARCH_MAX_USES = 4
+WEB_FETCH_MAX_USES = 6
 
 # Unset, a single fetch can put an unbounded page into context. Roughly matched to
 # the browser's snapshot cap so the two engines cost comparable amounts per page.
@@ -442,7 +446,42 @@ def build_tools(
             "Do not call any more tools."
         )
 
+    @beta_tool
+    def note_followup(
+        entity: str,
+        kind: Literal["subsidiary", "parent", "investor", "competitor", "partner"],
+        reason: str,
+    ) -> str:
+        """Flag another *organisation* worth researching in its own right.
+
+        Use this when you find a company whose own details would materially change the
+        picture -- a parent that actually owns the business, a subsidiary that holds
+        the operations, a named investor, a direct competitor. Do not research it
+        yourself; note it and carry on with your own question.
+
+        Only organisations. Never use this for a person.
+
+        Args:
+            entity: The organisation's name, as the page gave it.
+            kind: How it relates to the company being researched.
+            reason: One line on why it is worth a closer look.
+        """
+        recorder.note_followup(entity=entity, kind=kind, reason=reason)
+        recorder.log_step(
+            step_type="tool_result",
+            tool_name="note_followup",
+            tool_input={"entity": entity, "kind": kind},
+            output_summary=f"noted {entity!r} ({kind})",
+            url=recorder.page.url,
+        )
+        return (
+            f"Noted {entity!r} as a {kind} worth following up. "
+            "Continue with your own question."
+        )
+
     recording = [record_findings, mark_unknown, record_person, finish_research]
+    if settings.depth_profile.max_children > 0:
+        recording.insert(-1, note_followup)
 
     if settings.engine == "fetch":
         # No browser tools; the model works through SERVER_TOOLS alone.

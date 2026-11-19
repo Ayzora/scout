@@ -31,6 +31,12 @@ Rules:
 * Every field with no supporting finding goes in `unknowns`, left null or empty above.
 * If no ideal customer profile was supplied, set `qualification` to null. Do not invent
   criteria to score against.
+* Where `conflicts` lists a field, sources disagreed about it. Say so in the profile
+  rather than silently choosing one value, and prefer the value carrying the stronger
+  source where you must choose.
+* A claim resting on one source is not wrong, but it is weaker than one several
+  independent sources agree on. Let `corroboration_summary` temper how firmly the
+  summary asserts things.
 """
 
 
@@ -43,6 +49,8 @@ def synthesize(
     objectives: str | None,
     icp: dict | None,
     research_summary: str | None,
+    corroboration: dict | None = None,
+    conflicts: list[str] | None = None,
 ) -> tuple[SynthesisResult, Any]:
     """Return the profile and the call's usage.
 
@@ -51,6 +59,8 @@ def synthesize(
     """
     payload = {
         "research_objectives": objectives,
+        "corroboration_summary": corroboration,
+        "conflicts": conflicts or [],
         "ideal_customer_profile": icp,
         "agent_summary": research_summary,
         "findings": findings,

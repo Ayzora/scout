@@ -42,11 +42,67 @@ def get_engine(settings: Settings) -> Engine:
 
 
 def init_db(settings: Settings) -> Path:
-    """Create the database and all tables. Idempotent."""
+    """Create the database and all tables. Idempotent.
+
+    ``create_all`` adds missing tables but never alters an existing one, so on a
+    database created before a column was added it leaves the schema half-right and
+    fails later at query time. New tables therefore come from here and changes to
+    existing ones from Alembic (``uv run alembic upgrade head``), with
+    ``schema_is_current`` telling the two apart.
+    """
     engine = get_engine(settings)
     settings.screenshot_dir.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     return settings.db_path
+
+
+def schema_is_current(settings: Settings) -> tuple[bool, str | None]:
+    """Whether the database is at the latest migration.
+
+    Returns ``(ok, message)``. A database with no ``alembic_version`` row predates
+    migrations entirely; one stamped at an older revision needs an upgrade. Either way
+    the caller can say so plainly instead of failing on a missing column later.
+    """
+    from sqlalchemy import inspect, text
+
+    engine = get_engine(settings)
+    inspector = inspect(engine)
+    if not inspector.has_table("alembic_version"):
+        if not inspector.has_table("runs"):
+            return True, None  # empty database; init_db will build it
+        return False, (
+            "this database predates migrations. Run: uv run alembic stamp head"
+        )
+
+    with engine.connect() as connection:
+        current = connection.execute(
+            text("select version_num from alembic_version")
+        ).scalar()
+
+    expected = _head_revision()
+    if expected is None or current == expected:
+        return True, None
+    return False, (
+        f"database is at migration {current}, latest is {expected}. "
+        "Run: uv run alembic upgrade head"
+    )
+
+
+def _head_revision() -> str | None:
+    """The newest revision on disk, or None if Alembic is not set up."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+    except ImportError:
+        return None
+    root = Path(__file__).resolve().parents[3]
+    ini = root / "alembic.ini"
+    if not ini.exists():
+        return None
+    try:
+        return ScriptDirectory.from_config(Config(str(ini))).get_current_head()
+    except Exception:
+        return None
 
 
 @contextmanager
