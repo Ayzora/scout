@@ -124,6 +124,28 @@ def test_downgrade_and_upgrade_round_trip(fresh_db):
     assert _has_column(fresh_db, "people", "branch_id")
 
 
+def test_a_fresh_install_is_not_reported_as_out_of_date(tmp_path):
+    """``scout init`` builds the tables with create_all, which Alembic cannot see.
+
+    Without stamping, a brand-new install told the user its own schema predated
+    migrations and to run a command it did not need.
+    """
+    from dataclasses import replace
+
+    from scout.config import load_settings
+    from scout.db.session import init_db, reset_engine, schema_is_current
+
+    settings = replace(load_settings(), data_dir=tmp_path)
+    reset_engine()
+    init_db(settings)
+    try:
+        ok, message = schema_is_current(settings)
+        assert ok, message
+        assert _version(tmp_path / "scout.db") == HEAD
+    finally:
+        reset_engine()
+
+
 @pytest.mark.skipif(
     not (PROJECT_ROOT / "data" / "scout.db").exists(),
     reason="no local database with measured runs to migrate",

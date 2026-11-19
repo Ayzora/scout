@@ -29,7 +29,12 @@ RECORDING_TOOLS = {
     "record_person",
     "finish_research",
 }
+# Reached over plain HTTP, so every engine has them. Keeping them common is what
+# keeps the engine comparison about page access alone.
+SHARED_TOOLS = {"lookup_registry"}
+
 BROWSER_TOOLS = {
+    "open_page",
     "browser_goto",
     "browser_snapshot",
     "browser_click",
@@ -71,8 +76,33 @@ def test_fetch_engine_gets_no_browser_tools(tmp_path):
             session=None, recorder=_recorder(settings), settings=settings
         )
     }
-    assert names == RECORDING_TOOLS
+    assert names == RECORDING_TOOLS | SHARED_TOOLS
     assert not (names & BROWSER_TOOLS)
+
+
+def test_every_engine_can_reach_a_register(tmp_path):
+    """A register is plain HTTP. Withholding it from one engine would make the
+    comparison a test of that rather than of how pages are read."""
+    for engine in VALID_ENGINES:
+        settings = _settings(tmp_path / f"reg-{engine}", engine)
+        session = None
+        if engine in ("browser", "browser_toolset"):
+            session = BrowserSession(
+                screenshot_dir=tmp_path / f"reg-{engine}" / "shots", headed=False
+            )
+            session.start()
+        try:
+            names = {
+                t.name
+                for t in build_tools(
+                    session=session, recorder=_recorder(settings), settings=settings
+                )
+                if hasattr(t, "name")
+            }
+        finally:
+            if session is not None:
+                session.close()
+        assert SHARED_TOOLS <= names, engine
 
 
 def test_browser_engine_gets_both(tmp_path):
@@ -96,7 +126,7 @@ def test_both_engines_record_identically(tmp_path):
     for engine in VALID_ENGINES:
         settings = _settings(tmp_path / engine, engine)
         session = None
-        if engine == "browser":
+        if engine in ("browser", "browser_toolset"):
             session = BrowserSession(
                 screenshot_dir=tmp_path / engine / "shots", headed=False
             )
@@ -111,7 +141,9 @@ def test_both_engines_record_identically(tmp_path):
         surfaces[engine] = {
             t.name: t.to_dict()["input_schema"]
             for t in tools
-            if t.name in RECORDING_TOOLS
+            # A toolset is one entry with many members and no single name, so it is
+            # not part of the recording surface being compared.
+            if getattr(t, "name", None) in RECORDING_TOOLS
         }
     assert surfaces["browser"] == surfaces["fetch"]
 
@@ -222,6 +254,25 @@ def test_each_engine_is_told_only_what_it_has():
     # The fetch engine is told to report its blind spots rather than paper over them.
     assert "mark_unknown" in fetch
     assert "JavaScript" in fetch
+
+
+def test_every_engine_is_told_how_to_corroborate():
+    """Corroboration was the point of the tree and it measured 2% on the first run.
+
+    The rule is shared, so no engine is held to a weaker evidence standard, and it
+    has to name the source hierarchy or "independent" means nothing.
+    """
+    for engine in VALID_ENGINES:
+        prompt = system_prompt(engine)
+        assert "# Corroborating what matters" in prompt
+        assert "two pages of the same site is not" in prompt
+        # The hierarchy, or the agent cannot tell a filing from a directory entry.
+        assert "Statutory registers" in prompt
+        assert "openly editable" in prompt
+        # And a reminder that it is a flag, not a gate.
+        assert "single-sourced, not discarded" in prompt
+        # Without a cost caveat the agent would corroborate everything.
+        assert "Do not spend your whole budget corroborating" in prompt
 
 
 # ------------------------------------- the hypothesis the evaluation set must settle

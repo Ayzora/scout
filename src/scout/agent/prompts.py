@@ -21,27 +21,35 @@ not publicly available.
 _HOW_TO_WORK_BROWSER = """\
 # How to work
 
-1. Start at the company's own website. Take a snapshot and read it.
-2. Use `browser_find_links` to see what pages exist rather than guessing URLs. Pages worth
-   visiting on most sites: about, team or leadership, contact or imprint, products or
-   services, careers, news or press.
-3. Follow links with `browser_click` using the `[ref=N]` handles from the snapshot. Only
-   click a ref the current snapshot showed you; if a ref is stale, take a fresh snapshot.
-4. Use `web_search` when the company's own site does not answer something, or to
-   corroborate a claim. Use `web_fetch` for a specific page you already have a URL for and
-   that does not need interaction.
-5. Some information only appears after an interaction: expanding a section, accepting a
-   cookie banner, or clicking a "meet the team" button. Interact when that is what a person
-   would do.
-6. Request a screenshot (`include_screenshot=true`) when the information is carried by
+1. Read a page with `open_page`. It fetches directly, which is fast, and reopens the
+   page in the browser by itself when what came back is a challenge, an error, or a
+   shell that only renders in a browser. It tells you which happened. You do not have
+   to decide this, and you should not try to.
+2. `browser_goto` is for when you are going to *interact* with a page rather than read
+   it -- expanding a section, working through a form, following something that has no
+   URL of its own. Reading comes through `open_page`.
+3. Use `browser_find_links` to see what pages exist rather than guessing URLs. Pages
+   worth visiting on most sites: about, team or leadership, contact or imprint,
+   products or services, careers, news or press.
+4. Follow links with `browser_click` using the `[ref=N]` handles from a snapshot. Only
+   click a ref the current snapshot showed you; if a ref is stale, take a fresh
+   snapshot. Refs come from the browser, so `browser_goto` or `browser_snapshot`
+   first, or an `open_page` result that says it escalated.
+5. Use `web_search` to find a page you do not have a URL for. Searching is the one
+   thing here billed per call rather than per word, so prefer opening a URL you were
+   already given -- including any listed in your brief -- over searching for it again.
+6. Some information only appears after an interaction: expanding a section, accepting a
+   cookie banner, or clicking a "meet the team" button. Interact when that is what a
+   person would do.
+7. Request a screenshot (`include_screenshot=true`) when the information is carried by
    layout or imagery rather than text -- partner and technology logos, infographics,
-   image-based team pages, charts. Do not request one for ordinary prose; it costs far more
-   than reading the text.
+   image-based team pages, charts. Do not request one for ordinary prose; it costs far
+   more than reading the text.
 
-A snapshot is filtered: repeated navigation, footer and cookie text is removed, and where a
-page marks its own main content only that is read. The tool result says when this happened.
-If something you expect is missing, that filtering is the likely reason -- take a screenshot
-to see the page as a person would.
+A snapshot is filtered: repeated navigation, footer and cookie text is removed, and
+where a page marks its own main content only that is read. The tool result says when
+this happened. If something you expect is missing, that filtering is the likely reason
+-- take a screenshot to see the page as a person would.
 """
 
 _HOW_TO_WORK_FETCH = """\
@@ -96,7 +104,41 @@ Several entries may share a field. For a list of products, that is one entry per
 all inside the same `record_findings` call, not one call each, and not everything crammed
 into a single string.
 
+# Corroborating what matters
+
+A claim nobody but the company makes about itself is weaker than one an independent
+source confirms. For the few facts that carry real weight -- the legal entity and
+registration number, the headquarters, the headcount, the revenue, who runs it -- look
+for a second, independent confirmation and record it as its own finding with that
+source's own URL and quote. Two findings citing two different sites is what makes a
+claim corroborated; two pages of the same site is not.
+
+Sources are not equal, strongest first:
+
+1. **Statutory registers and regulatory filings** -- Companies House, the SEC, a
+   financial regulator's register, the NHS organisation directory. The strongest claim
+   available about legal identity, officers and accounts. Call `lookup_registry` for
+   these rather than searching: it is free and exact, where a search costs money and
+   returns someone's summary of the register. An entity the register marks as not
+   active is a former name, however many other sites still use it.
+2. **The company itself** -- its own site, annual report, press releases.
+3. **Established press and industry publications.**
+4. **Aggregators and anything openly editable** -- Wikipedia, Crunchbase, Dealroom and
+   the like. Usable, never primary, and often copied from one of the above, so two of
+   them agreeing tells you little.
+
+Do not spend your whole budget corroborating. One confirming source for a claim that
+matters beats five for a claim that does not, and an uncorroborated finding is still
+worth recording -- it is reported as single-sourced, not discarded.
+
+If two sources genuinely disagree, record both as findings. The disagreement is a
+result, and silently picking one hides it.
+
 # People
+
+A named person goes in `record_person`, one call per person, never in `record_findings`.
+A board listed as a finding is a sentence; the same board recorded as people is a list
+anyone can sort, filter and check, which is the whole point of recording it.
 
 Record a person only when the company itself publishes them: a team page, a press release,
 an imprint or a public filing. Store contact details only where they are published on that
@@ -128,9 +170,38 @@ sources are exhausted — whichever comes first. Do not look for more work once 
 Pass a short summary of what you established and what you could not. Call it exactly once.
 """
 
+# The same browser as the `browser` engine, reached through Anthropic's member names.
+# Deliberately brief: the point of this engine is that the model already knows this
+# interface, so restating it in detail would be telling it what it has seen far more
+# of than anything written here -- and would make the comparison a test of two
+# prompts rather than of two interfaces.
+_HOW_TO_WORK_BROWSER_TOOLSET = """\
+# How to work
+
+You have a real browser, through the standard browser toolset.
+
+1. Start at the company's own website with `navigate`, then `read_page`.
+2. Follow links by clicking the `ref_N` references `read_page` gives you. Only use a
+   reference from the current page; re-read the page if one is stale.
+3. `find` locates text on the page and surfaces candidate pages worth opening: about,
+   team or leadership, contact or imprint, products, careers, news or press.
+4. `get_page_text` returns the page's full prose when `read_page` has filtered out
+   something you need.
+5. Use `web_search` when the company's own site does not answer something, and
+   `web_fetch` for a page whose URL you already have and that needs no interaction.
+6. `screenshot` when information is carried by layout or imagery rather than text.
+   Not for ordinary prose: it costs far more than reading the text.
+
+This browser clicks by element reference, not by coordinate, and types through
+`form_input` with a reference rather than `type`. `read_page` is filtered: repeated
+navigation, footer and cookie text is dropped. If something you expect is missing,
+`get_page_text` or a screenshot will show the whole page.
+"""
+
 _HOW_TO_WORK = {
     "browser": _HOW_TO_WORK_BROWSER,
     "fetch": _HOW_TO_WORK_FETCH,
+    "browser_toolset": _HOW_TO_WORK_BROWSER_TOOLSET,
 }
 
 
@@ -164,56 +235,6 @@ def _as_url(domain: str) -> str:
             d = d[len(prefix):]
             break
     return "https://" + d.strip("/")
-
-
-def build_company_brief(
-    *,
-    domain: str,
-    name: str | None,
-    objectives: str | None,
-    requested_fields: list[str] | None,
-    icp: dict | None,
-) -> str:
-    """The per-company user message. Varies per company, so it must sit after the
-    cached system prefix rather than inside it."""
-    lines: list[str] = []
-    label = name or domain
-    lines.append(f"Research this company: {label}")
-    lines.append(f"Website: {_as_url(domain)}")
-    lines.append("")
-
-    if objectives:
-        lines.append("## Research objectives")
-        lines.append(objectives.strip())
-        lines.append("")
-
-    if requested_fields:
-        lines.append("## Fields to populate")
-        lines.append(
-            "Record a finding for each of these, or an explicit unknown if you cannot "
-            "establish it:"
-        )
-        for f in requested_fields:
-            lines.append(f"- {f}")
-        lines.append("")
-        lines.append(
-            "This list and the objectives above are the whole job. Do not add fields "
-            "that were not asked for, and do not keep going once they are covered."
-        )
-        lines.append("")
-
-    if icp:
-        lines.append("## Ideal customer profile")
-        lines.append(
-            "Assess how well this company matches the following criteria, and record "
-            "your reasoning as findings with evidence:"
-        )
-        for key, value in icp.items():
-            lines.append(f"- {key}: {value}")
-        lines.append("")
-
-    lines.append("Begin by opening the company's website.")
-    return "\n".join(lines)
 
 
 # Kept small on purpose: the agent chases whatever it is given, and every field costs

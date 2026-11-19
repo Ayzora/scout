@@ -13,6 +13,7 @@ model when asked.
 from __future__ import annotations
 
 import base64
+import json
 import time
 from typing import Any, Literal
 
@@ -20,7 +21,9 @@ from anthropic import beta_tool
 from pydantic import BaseModel
 
 from scout.agent.recorder import Recorder
-from scout.browser.session import BrowserSession, PageView
+from scout.browser.fetcher import http_get, needs_browser
+from scout.registry import lookup as registry_lookup
+from scout.browser.session import BrowserSession, PageView, normalise_url
 from scout.config import Settings
 
 # Per branch, not per company. Searches are billed per request ($10 per 1,000), which
@@ -28,11 +31,22 @@ from scout.config import Settings
 # cheap one -- so with several branches the per-branch allowance has to come down or
 # search becomes the largest line in a deep run.
 WEB_SEARCH_MAX_USES = 4
+
+# What a branch gets once earlier branches have handed it what they found. A search is
+# billed per request, not per token, so at Haiku prices ten searches cost five times
+# everything else in a run put together -- the one line item where a cap is the only
+# lever.
+WEB_SEARCH_MAX_USES_WITH_DOSSIER = 2
+
 WEB_FETCH_MAX_USES = 6
 
 # Unset, a single fetch can put an unbounded page into context. Roughly matched to
 # the browser's snapshot cap so the two engines cost comparable amounts per page.
 WEB_FETCH_MAX_CONTENT_TOKENS = 4_000
+
+# A directly fetched page enters context as text, so it needs the same ceiling the
+# browser snapshot has. Roughly matched to it, in characters rather than tokens.
+_FETCH_TEXT_CAP = 8_000
 
 
 class FindingInput(BaseModel):
@@ -45,6 +59,7 @@ class FindingInput(BaseModel):
     evidence_quote: str
     confidence: float | None = None
     reason: str | None = None
+
 
 SERVER_TOOLS: list[dict[str, Any]] = [
     {
@@ -60,6 +75,18 @@ SERVER_TOOLS: list[dict[str, Any]] = [
         "citations": {"enabled": True},
     },
 ]
+
+
+def server_tools(max_searches: int = WEB_SEARCH_MAX_USES) -> list[dict[str, Any]]:
+    """The server-side tools, with this branch's search allowance.
+
+    Search is the one cost that no amount of caching touches: it is billed per request.
+    A branch that has been told what earlier branches found needs fewer of them, so the
+    allowance is an argument rather than a constant.
+    """
+    tools = [dict(t) for t in SERVER_TOOLS]
+    tools[0]["max_uses"] = max(1, max_searches)
+    return tools
 
 
 def _image_block(png: bytes) -> dict[str, Any]:
@@ -85,8 +112,8 @@ def build_tools(
     ``fetch`` works through the server-side tools alone. Both get the same recording
     surface, so their findings are directly comparable.
     """
-    if settings.engine == "browser" and session is None:
-        raise ValueError("the browser engine needs a BrowserSession")
+    if settings.engine in ("browser", "browser_toolset") and session is None:
+        raise ValueError(f"the {settings.engine} engine needs a BrowserSession")
 
     def _budget_exhausted() -> str | None:
         if recorder.step_count >= settings.max_steps:
@@ -129,7 +156,117 @@ def build_tools(
             return text + "\n\n[screenshot unavailable]"
         return [{"type": "text", "text": text}, _image_block(png)]
 
+    @beta_tool
+    def lookup_registry(name: str) -> str:
+        """Ask a statutory register for an organisation, by name.
+
+        Free, exact, and the strongest source there is for legal identity: the
+        registered name, the registration number, whether the entity is still live,
+        and its registered postcode. Use it before searching the web for any of those.
+
+        Returns one entry per match, each with the register's own URL. An entity whose
+        status is not active is a former name -- aggregators keep those long after the
+        register has retired them, so check the status before recording a name.
+
+        Args:
+            name: The organisation's name, as best you know it.
+        """
+        if (stop := _budget_exhausted()) is not None:
+            return stop
+        started = time.monotonic()
+        answer = registry_lookup(name, recorder.company_domain)
+        payload = json.dumps(answer.as_dict(), indent=1)
+        for hit in answer.hits:
+            if hit.source_url:
+                recorder.fetched_urls.add(hit.source_url)
+        if answer.url:
+            payload += (
+                "\n\nOpen that URL with open_page and quote the page itself; do not "
+                "record a number this tool did not return."
+            )
+        recorder.log_step(
+            step_type="tool_result",
+            tool_name="lookup_registry",
+            tool_input={"name": name},
+            output_summary=payload[:2000],
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        return payload
+
     # ------------------------------------------------------------------ browser
+
+    @beta_tool
+    def open_page(url: str) -> str:
+        """Read a page. Use this first for any URL you are not going to interact with.
+
+        The page is fetched directly, which is fast. If what comes back is a bot
+        challenge, an error, or a near-empty shell that only renders in a browser, it
+        is reopened in the real browser automatically and you are told that happened.
+        When that is the case the browser is left on that page, so the [ref=N] handles
+        in the result can be clicked straight away.
+
+        Args:
+            url: Absolute URL, or a bare domain such as example.com.
+        """
+        if (stop := _budget_exhausted()) is not None:
+            return stop
+        started = time.monotonic()
+        target = normalise_url(url)
+
+        allowed, why = session._robots.allowed(target)
+        if not allowed:
+            recorder.log_step(
+                step_type="tool_result",
+                tool_name="open_page",
+                tool_input={"url": target},
+                output_summary=f"refused: {why}",
+                url=target,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return (
+                f"Navigation refused: {why}. Respect it and try another source."
+            )
+
+        result = http_get(target, timeout=settings.page_timeout_ms / 1000)
+        escalate, reason = needs_browser(result)
+
+        if not escalate:
+            recorder.page.url = target
+            recorder.page.title = ""
+            recorder.page.screenshot_path = None
+            recorder.visited_urls.add(target)
+            recorder.fetched_urls.add(target)
+            body = result.text[:_FETCH_TEXT_CAP]
+            truncated = len(result.text) > _FETCH_TEXT_CAP
+            text = (
+                f"URL: {target}\nRead directly ({len(result.text)} characters, "
+                f"{result.elapsed_ms}ms).\n\n{body}"
+            )
+            if truncated:
+                text += (
+                    "\n\n[truncated — open a more specific page if you need the rest]"
+                )
+            recorder.log_step(
+                step_type="tool_result",
+                tool_name="open_page",
+                tool_input={"url": target},
+                output_summary=text[:2000],
+                url=target,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return text
+
+        # The page did not come back readable, so pay for the browser.
+        nav = session.goto(target)
+        delivered = _deliver(
+            nav.view,
+            tool_name="open_page",
+            tool_input={"url": target, "escalated": True, "reason": reason},
+            include_screenshot=False,
+            started=started,
+        )
+        return f"Opened in the browser because {reason}.\n\n{delivered}"
+
 
     @beta_tool
     def browser_goto(
@@ -483,11 +620,28 @@ def build_tools(
     if settings.depth_profile.max_children > 0:
         recording.insert(-1, note_followup)
 
+    # A register is reached over plain HTTP, so every engine gets it. Keeping it
+    # common is also what keeps the engine comparison about page access alone.
     if settings.engine == "fetch":
         # No browser tools; the model works through SERVER_TOOLS alone.
-        return recording
+        return [lookup_registry, *recording]
+
+    if settings.engine == "browser_toolset":
+        # Anthropic's browser members instead of Scout's own, executed against the
+        # same session. The SDK disables every member the toolset does not implement,
+        # so the ones Scout cannot express are never offered to the model.
+        from scout.browser.toolset import ScoutBrowserToolset
+
+        assert session is not None
+        return [
+            ScoutBrowserToolset(session=session, recorder=recorder),
+            lookup_registry,
+            *recording,
+        ]
 
     return [
+        lookup_registry,
+        open_page,
         browser_goto,
         browser_snapshot,
         browser_click,

@@ -13,7 +13,6 @@ and a flag the evaluation harness can count.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import timezone
 from urllib.parse import urlparse
 
 from sqlalchemy import func

@@ -21,3 +21,7 @@ web/out/
 
 # OS
 .DS_Store
+
+# Exported results
+results.csv
+*.results.csv

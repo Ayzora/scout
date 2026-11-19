@@ -6,7 +6,6 @@ guard -- so a failure here is a real bug rather than a model behaviour.
 
 from __future__ import annotations
 
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 

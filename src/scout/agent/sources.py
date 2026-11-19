@@ -42,6 +42,13 @@ REGISTRY_HOSTS = frozenset(
         "kvk.nl",  # Netherlands
         "asic.gov.au",  # Australia
         "sedar.com",  # Canada
+        "directory.spineservices.nhs.uk",  # NHS organisation directory
+        "england.nhs.uk",  # NHS England: licenses and publishes the trust record
+        "dsptoolkit.nhs.uk",  # NHS official organisation register
+        "digital.nhs.uk",
+        "nhsbsa.nhs.uk",
+        "odsdatasearchandexport.nhsbsa.nhs.uk",
+        "cqc.org.uk",  # UK health and social care regulator
         "fca.org.uk",  # UK financial regulator
         "register.fca.org.uk",
         "gov.uk",

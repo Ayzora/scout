@@ -32,5 +32,9 @@ build-backend = "hatchling.build"
 packages = ["src/scout"]
 
 [tool.pytest.ini_options]
+# Hits a real public API. Excluded from the default run so the suite stays
+# offline and free: uv run pytest -m live
+markers = ["live: calls a real external service"]
+addopts = "-m 'not live'"
 testpaths = ["tests"]
 pythonpath = ["src"]

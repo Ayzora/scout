@@ -7,9 +7,10 @@ company names or domains into structured profiles.
 Local-first: the browser, the agent and the database all run on your own machine, with
 your own Anthropic API key. No account to create, no hosted service, no cloud database.
 
-> **Status: Phase 1 (CLI vertical slice).** Research, evidence capture, SQLite persistence
-> and CSV export work from the command line. The dashboard, batch concurrency and the
-> evaluation harness are not built yet — see [Roadmap](#roadmap).
+> **Status: works from the command line.** Research runs as a tree of branches, every
+> quote can be checked against its source page, and one company measured **$0.087 for 69
+> findings**. The dashboard, batch concurrency and the evaluation harness are not built
+> yet — see [Roadmap](#roadmap).
 
 ## Why a browser
 
@@ -57,8 +58,15 @@ uv run scout research --csv examples/companies.csv
 uv run scout research --csv examples/companies.csv \
   --icp '{"size":"200-5000 employees","region":"UK or EU"}'
 
-# Inspect one company's findings with their sources
+# Choose how deep to go: shallow | standard | deep
+uv run scout research --domain monzo.com --depth deep \
+  --objectives "What do they sell, and who leads the company?"
+
+# Inspect one company: findings, sources, the branch tree, what is corroborated
 uv run scout show --company-run 1
+
+# Check every recorded quote against the page it came from (free, no model)
+uv run scout verify --run 1
 
 # Export
 uv run scout export --run 1 -o results.csv
@@ -71,13 +79,25 @@ More in [examples/README.md](examples/README.md).
 ```
 scout research
       │
-      ├─ Playwright Chromium (headed by default, so you can watch)
-      │     browser_goto / snapshot / click / type / scroll / find_links
+      ├─ plan        one structured call, no tools: which branches to research
       │
-      ├─ Claude (your key)  ── web_search, web_fetch for the cheap first pass
+      ├─ branches    each its own short conversation, own budget, own question
+      │                identity · products · people · financials · market · signals
+      │                  │
+      │                  ├─ Playwright Chromium (headed by default, so you can watch)
+      │                  └─ Claude (your key) + web_search / web_fetch
       │
-      └─ SQLite  findings · evidence · people · agent trace · metrics
+      ├─ merge       pure Python: group equal claims, weigh sources, find conflicts
+      │
+      └─ synthesize  a profile from the recorded findings only
 ```
+
+**Research is a tree, not one long conversation.** A single conversation re-reads its own
+history every turn, so its cost grows with the *square* of its length: ten times the depth
+costs forty times as much. Split across branches it grows linearly. That is the whole
+reason depth is affordable — `--depth deep` costs less than a shallow pass did on a larger
+model. Branches run one after another; running them at the same time would save time, not
+money.
 
 **Pages are read as a rendered snapshot**: text, with a stable `[ref=N]` handle on every
 interactive element. The agent can only click a ref the snapshot actually showed it, which
@@ -96,14 +116,33 @@ actually opened, and flags any that it never visited.
 the database schema, not merely in the prompt. A gap is recorded as an unknown with a
 reason rather than left silently absent, so completeness figures mean something.
 
+**Sources are weighed by where they come from**, not by assertion: a statutory register
+above the company's own site, above the press, above anything openly editable. A claim
+counts as corroborated only with two *different* hosts and at least one primary among
+them — so two aggregators copying the same original do not confirm each other, and three
+pages of one site are one source. A single-sourced claim is flagged, never discarded.
+
+**Disagreements are surfaced** rather than resolved silently. If two sources give
+different headquarters, both are recorded and the conflict is reported.
+
 **Synthesis is a second pass** that sees only the recorded findings, never the live pages,
 so it cannot introduce a claim that no page supported.
 
+**And the quotes can be checked.** `scout verify` reopens every cited page and matches the
+stored quote against the rendered text. It uses no model, so it costs nothing and can run
+after every research run. On a real run: 45 verbatim, 2 paraphrased, 0 fabricated.
+
 ## Limits, by design
 
-Scout respects `robots.txt`, and when a site serves a bot-protection challenge or returns
-401/403/429 it records the gap and moves on. There is no CAPTCHA solving and no evasion. It
-does not log in, use supplied cookies, or scrape LinkedIn.
+Scout respects `robots.txt` by default, and when a site serves a bot-protection challenge
+or returns 401/403/429 it records the gap and moves on. There is no CAPTCHA solving and no
+evasion. It does not log in, use supplied cookies, or scrape LinkedIn.
+
+`SCOUT_RESPECT_ROBOTS=false` turns the robots check off. It changes nothing else — the
+challenge detection, the refusal to log in and the rest of the limits above are not
+conditional on it. Worth knowing before reaching for it: a site that allows crawling can
+still block an unfamiliar client, and that is the firewall talking rather than a rule you
+are bound by, so the switch is often not the thing you actually need.
 
 For people, Scout records only what the company itself publishes, and never constructs an
 email address from a pattern. See [docs/data-protection.md](docs/data-protection.md).
@@ -112,7 +151,8 @@ email address from a pattern. See [docs/data-protection.md](docs/data-protection
 
 ```bash
 uv sync --extra dev
-uv run pytest           # 32 tests, no API key required
+uv run pytest           # 201 tests, no API key required
+uv run pytest -m live   # a handful that call free public APIs
 ```
 
 The test suite deliberately needs no API key: the browser layer, the recording and
@@ -124,10 +164,24 @@ a failure is a real bug rather than model behaviour.
 | Phase | Scope | State |
 |---|---|---|
 | 1 | CLI vertical slice: browser tools, evidence recording, SQLite, CSV export | **done** |
-| 2 | Batch concurrency, resume, per-company budget tuning | next |
+| 1b | Cost: prompt caching, cheap-model default, `scout verify` | **done** |
+| 1c | Deep research: planner, branches, source tiers, corroboration, conflicts | **done** |
+| 2 | Batch concurrency and resume — which also parallelises branches | next |
 | 3 | FastAPI + SSE, Next.js dashboard with live agent timeline | not started |
-| 4 | Decision-maker depth, ICP scoring, human review write-back | partial (recording works; no review UI) |
-| 5 | Evaluation harness and report, outreach drafts, demo | not started |
+| 4 | ICP scoring and human review write-back | partial (recording works; no review UI) |
+| 5 | Evaluation harness: the three engines and the model tiers, measured | not started |
+
+### Engines
+
+Scout can read the web three ways, all recording into the same schema so a run of each on
+one company is directly comparable. Which is best is an open question the evaluation set is
+meant to answer, not something asserted here.
+
+| `SCOUT_ENGINE` | How it reads pages |
+|---|---|
+| `browser` | Playwright, through Scout's own seven tools. The default. |
+| `fetch` | No browser at all: server-side `web_search` and `web_fetch` only, i.e. conventional scripted research. |
+| `browser_toolset` | The same Playwright browser behind Anthropic's `browser_toolset_20260801` interface, to test whether its standard vocabulary navigates better than Scout's own. |
 
 ## Licence
 

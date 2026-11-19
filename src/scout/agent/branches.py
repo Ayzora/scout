@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from anthropic import Anthropic
@@ -27,7 +25,12 @@ from anthropic import Anthropic
 from scout.agent.plan import BRANCH_BRIEFS, BranchName, BranchPlan, ResearchPlan
 from scout.agent.prompts import _as_url, system_prompt
 from scout.agent.recorder import Recorder
-from scout.agent.tools import SERVER_TOOLS, build_tools
+from scout.agent.tools import (
+    WEB_SEARCH_MAX_USES,
+    WEB_SEARCH_MAX_USES_WITH_DOSSIER,
+    build_tools,
+    server_tools,
+)
 from scout.browser.session import BrowserSession
 from scout.config import Settings
 from scout.db import models as m
@@ -55,6 +58,7 @@ def build_branch_brief(
     requested_fields: list[str],
     icp: dict | None,
     allow_followups: bool,
+    dossier: "Dossier | None" = None,
 ) -> str:
     """The user message for one branch.
 
@@ -91,6 +95,30 @@ def build_branch_brief(
             *[f"- {k}: {v}" for k, v in icp.items()],
             "",
         ]
+
+    if dossier is not None and not dossier.is_empty():
+        lines += ["## Already established, by branches that ran before you"]
+        if dossier.facts:
+            lines += [
+                "Do not spend a search establishing these again:",
+                *[f"- {f}: {v}" for f, v in dossier.facts],
+                "",
+                "One exception, and it matters: if a page you were reading anyway "
+                "confirms one of these from a *different* site, record it as a "
+                "finding with that site's own URL and quote. Each of these rests on "
+                "a single source until a second one is recorded, and a second source "
+                "found in passing is free. Do not go looking for one.",
+                "",
+            ]
+        if dossier.urls:
+            lines += [
+                "Pages already found useful for this company. Open one directly "
+                "rather than searching to find it again:",
+                *[f"- {u}" for u in dossier.urls],
+                "",
+            ]
+        if dossier.notes:
+            lines += ["What those branches concluded:", *[f"- {n}" for n in dossier.notes], ""]
 
     lines += [
         "## Scope",
@@ -168,6 +196,8 @@ def run_branch(
     icp: dict | None,
     budget_tokens: int,
     on_step: Any = None,
+    dossier: "Dossier | None" = None,
+    max_searches: int = WEB_SEARCH_MAX_USES,
 ) -> BranchOutcome:
     """One branch: one conversation, one question, one budget."""
     # Imported here because loop.py imports this module.
@@ -196,6 +226,7 @@ def run_branch(
         requested_fields=requested_fields,
         icp=icp,
         allow_followups=settings.depth_profile.max_children > 0 and depth == 1,
+        dossier=dossier,
     )
 
     status = m.Status.DONE.value
@@ -213,7 +244,7 @@ def run_branch(
                 }
             ],
             messages=[{"role": "user", "content": brief}],
-            tools=[*tools, *SERVER_TOOLS],
+            tools=[*tools, *server_tools(max_searches)],
             thinking={"type": "adaptive"},
             output_config={
                 "effort": settings.effort,
@@ -324,6 +355,7 @@ def run_branches(
     ceiling = settings.run_budget_tokens
 
     outcomes: list[BranchOutcome] = []
+    dossier = Dossier()
     spent = 0
     seen_entities: set[str] = set()
     queue: list[tuple[BranchPlan, int, int | None]] = [
@@ -364,10 +396,20 @@ def run_branches(
             # Never let one branch spend what the whole run has left.
             budget_tokens=max(20_000, min(per_branch, ceiling - spent)),
             on_step=on_step,
+            dossier=dossier,
+            # The first branch has to find the company; the ones after it have been
+            # told where it lives, so they are given fewer searches rather than
+            # trusted to want fewer.
+            max_searches=(
+                WEB_SEARCH_MAX_USES
+                if dossier.is_empty()
+                else WEB_SEARCH_MAX_USES_WITH_DOSSIER
+            ),
         )
 
         cost = estimate_cost_usd(model=settings.model, **outcome.usage.billable())
         _finish_branch_row(settings, outcome, cost)
+        dossier = read_dossier(settings, company_run_id)
         outcomes.append(outcome)
         spent += outcome.usage.output_tokens + outcome.usage.cache_write_tokens
         if on_branch is not None:
@@ -409,3 +451,103 @@ def branch_rows(settings: Settings, company_run_id: int) -> list[dict]:
             }
             for r in rows
         ]
+
+
+# --------------------------------------------------------------- branch handoff
+
+
+@dataclass
+class Dossier:
+    """What earlier branches established, handed to the ones that follow.
+
+    Branches are separate conversations on purpose -- that is what makes depth cost
+    linearly instead of quadratically. The price is that each one starts ignorant, and
+    the first thing an ignorant branch does is search for the company all over again.
+    On the WMAS run that was ten searches for one company, which at a cent each was 82%
+    of the bill while every token of browsing and reasoning came to two cents.
+
+    This is the cheap half of the fix. Anthropic runs ``web_search`` on its own servers,
+    so the results never pass through this program and cannot be cached. What can be
+    carried forward is what the searches *produced*: the established facts and the URLs
+    worth reading. A branch given those can fetch directly instead of searching to find
+    the same pages again.
+    """
+
+    facts: list[tuple[str, str]] = field(default_factory=list)
+    urls: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (self.facts or self.urls)
+
+
+# Kept small deliberately: the dossier enters every later branch's context, so a
+# generous one would trade a search charge for a cache-write charge on every turn.
+_DOSSIER_FACTS = 12
+_DOSSIER_URLS = 10
+_DOSSIER_VALUE_CHARS = 120
+
+
+def read_dossier(settings: Settings, company_run_id: int) -> Dossier:
+    """Collect what this company's finished branches have established so far."""
+    with session_scope(settings) as s:
+        findings = (
+            s.query(m.Finding.field, m.Finding.value)
+            .filter(m.Finding.company_run_id == company_run_id)
+            .filter(m.Finding.kind == m.FindingKind.FACT.value)
+            .order_by(m.Finding.id)
+            .all()
+        )
+        urls = (
+            s.query(m.Evidence.source_url)
+            .join(m.Finding, m.Finding.id == m.Evidence.finding_id)
+            .filter(m.Finding.company_run_id == company_run_id)
+            .order_by(m.Evidence.id)
+            .all()
+        )
+        summaries = (
+            s.query(m.Branch.name, m.Branch.summary)
+            .filter(m.Branch.company_run_id == company_run_id)
+            .filter(m.Branch.status == m.Status.DONE.value)
+            .order_by(m.Branch.id)
+            .all()
+        )
+
+    facts: list[tuple[str, str]] = []
+    seen_fields: set[str] = set()
+    for field_name, raw in findings:
+        # One value per field: the point is to stop a later branch re-establishing
+        # something, not to replay every variant of it.
+        if field_name in seen_fields:
+            continue
+        value = _trim(raw)
+        if not value:
+            continue
+        seen_fields.add(field_name)
+        facts.append((field_name, value))
+
+    seen_urls: set[str] = set()
+    kept_urls: list[str] = []
+    for (url,) in urls:
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            kept_urls.append(url)
+
+    notes = [
+        f"{name}: {_trim(summary, 200)}" for name, summary in summaries if summary
+    ]
+    return Dossier(
+        facts=facts[:_DOSSIER_FACTS],
+        urls=kept_urls[:_DOSSIER_URLS],
+        notes=notes,
+    )
+
+
+def _trim(raw: Any, limit: int = _DOSSIER_VALUE_CHARS) -> str:
+    """Values are stored as JSON, so a string arrives quoted."""
+    if raw is None:
+        return ""
+    text = raw if isinstance(raw, str) else str(raw)
+    text = text.strip().strip('"')
+    text = " ".join(text.split())
+    return text[: limit - 1] + "…" if len(text) > limit else text

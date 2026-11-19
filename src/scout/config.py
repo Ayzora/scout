@@ -15,9 +15,17 @@ MIN_TASK_BUDGET_TOKENS = 20_000
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
-# "browser" drives a real Chromium; "fetch" has no browser and uses only the
-# server-side web tools. See build_tools in agent/tools.py.
-VALID_ENGINES = ("browser", "fetch")
+# How the agent reaches pages. All three record through the same Recorder into the
+# same schema, so a run of each on one company is directly comparable.
+#
+#   browser          Scout's own seven Playwright tools.
+#   fetch            No browser; server-side web_search / web_fetch only.
+#   browser_toolset  The same Playwright browser behind Anthropic's
+#                    browser_toolset_20260801 interface, to measure whether its
+#                    standard vocabulary navigates better than Scout's own.
+#
+# See build_tools in agent/tools.py and browser/toolset.py.
+VALID_ENGINES = ("browser", "fetch", "browser_toolset")
 DEFAULT_ENGINE = "browser"
 
 
@@ -73,6 +81,7 @@ class Settings:
     context_editing: bool
     max_steps: int
     page_timeout_ms: int
+    respect_robots: bool
     data_dir: Path
 
     @property
@@ -155,6 +164,10 @@ def load_settings() -> Settings:
         # Off deliberately -- see context_management_arg in agent/loop.py.
         context_editing=_env_bool("SCOUT_CONTEXT_EDITING", False),
         max_steps=_env_int("SCOUT_MAX_STEPS", 60),
+        # On by default. Off is an operator decision, recorded per run rather
+        # than hidden, and it does not enable anything else: no CAPTCHA solving,
+        # no logins, no evasion.
+        respect_robots=_env_bool("SCOUT_RESPECT_ROBOTS", True),
         page_timeout_ms=_env_int("SCOUT_PAGE_TIMEOUT_MS", 20_000),
         data_dir=data_dir,
     )

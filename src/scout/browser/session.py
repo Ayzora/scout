@@ -10,7 +10,8 @@ it can only click something the snapshot showed it.
 
 Two deliberate restraints, from the spec's section 5:
 
-* ``robots.txt`` is honoured before any navigation.
+* ``robots.txt`` is honoured before any navigation, unless the operator turns the
+  check off with ``SCOUT_RESPECT_ROBOTS=false``.
 * A bot-protection challenge is detected and *reported*, never worked around. There is
   no CAPTCHA solving and no evasion here, by design.
 """
@@ -19,6 +20,8 @@ from __future__ import annotations
 
 import re
 import time
+import urllib.error
+import urllib.request
 import urllib.robotparser
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,6 +74,16 @@ _JS_ATTRIBUTE_TEXT = """
       const v = (el.getAttribute(attr) || '').trim();
       if (v) out.push(v);
     }
+  }
+  // Head metadata. An agent can legitimately cite a canonical URL or an og:site_name
+  // as what a page says about itself, and none of it appears in innerText.
+  if (document.title) out.push(document.title);
+  const canonical = document.querySelector('link[rel=canonical]');
+  if (canonical && canonical.href) out.push('canonical: ' + canonical.href);
+  for (const meta of document.querySelectorAll('meta[property], meta[name]')) {
+    const key = meta.getAttribute('property') || meta.getAttribute('name');
+    const value = (meta.getAttribute('content') || '').trim();
+    if (key && value) out.push(key + ': ' + value);
   }
   return out;
 }
@@ -221,32 +234,67 @@ class NavResult:
 
 
 class RobotsCache:
-    """One robots.txt parser per host, fetched at most once."""
+    """One robots.txt per host, fetched at most once.
 
-    def __init__(self) -> None:
+    ``enabled=False`` turns the check off entirely: ``allowed`` then says yes to any
+    http(s) URL without fetching anything. That is a deliberate switch rather than
+    deleted code, so a run records which policy it ran under and the honest default
+    survives in the repository.
+
+    Two details the standard library gets wrong for this job. It fetches with a
+    ``Python-urllib`` user agent, which firewalls answer with 403 -- and then treats
+    that 403 as "this site forbids everything", locking Scout out of sites that
+    explicitly allow crawling. RFC 9309 says the opposite: a 4xx on robots.txt means
+    no restrictions are published. So this fetches as the browser does and follows the
+    RFC.
+    """
+
+    # The fetch has to look like the browser that will do the browsing, or the answer
+    # is about urllib rather than about us.
+    _UA = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    )
+
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
         self._cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
 
     def allowed(self, url: str, user_agent: str = "*") -> tuple[bool, str | None]:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return False, f"unsupported scheme {parsed.scheme!r}"
+        if not self.enabled:
+            return True, None
         host = f"{parsed.scheme}://{parsed.netloc}"
         if host not in self._cache:
-            rp = urllib.robotparser.RobotFileParser()
-            rp.set_url(urljoin(host, "/robots.txt"))
-            try:
-                rp.read()
-            except Exception:
-                # Unreachable robots.txt is not a prohibition.
-                self._cache[host] = None
-            else:
-                self._cache[host] = rp
+            self._cache[host] = self._fetch(host)
         rp = self._cache[host]
         if rp is None:
             return True, None
         if rp.can_fetch(user_agent, url):
             return True, None
         return False, "disallowed by robots.txt"
+
+    def _fetch(self, host: str) -> urllib.robotparser.RobotFileParser | None:
+        """Read a host's robots.txt, or None when it publishes no usable rules."""
+        request = urllib.request.Request(
+            urljoin(host, "/robots.txt"), headers={"User-Agent": self._UA}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError:
+            # 4xx means no robots.txt is being served -- including the 401/403 a
+            # firewall returns to an unfamiliar client. Not a prohibition.
+            # 5xx is the server failing, which is not a prohibition either.
+            return None
+        except Exception:
+            # Unreachable robots.txt is not a prohibition.
+            return None
+        rp = urllib.robotparser.RobotFileParser()
+        rp.parse(body.splitlines())
+        return rp
 
 
 def normalise_url(raw: str) -> str:
@@ -266,13 +314,17 @@ class BrowserSession:
     headed: bool = True
     timeout_ms: int = 20_000
     snapshot_cap: int = _SNAPSHOT_CHAR_CAP
+    respect_robots: bool = True
 
     _pw: Playwright | None = field(default=None, init=False, repr=False)
     _browser: object | None = field(default=None, init=False, repr=False)
     _page: Page | None = field(default=None, init=False, repr=False)
     _shot_seq: int = field(default=0, init=False)
-    _robots: RobotsCache = field(default_factory=RobotsCache, init=False)
+    _robots: RobotsCache = field(init=False)
     visited: list[str] = field(default_factory=list, init=False)
+
+    def __post_init__(self) -> None:
+        self._robots = RobotsCache(enabled=self.respect_robots)
 
     def __enter__(self) -> "BrowserSession":
         self.start()

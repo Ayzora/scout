@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field as dc_field
 
-from scout.agent.sources import TIER_COMPANY, TIER_REGISTRY, host_of
+from scout.agent.sources import TIER_COMPANY, TIER_REGISTRY, host_of, source_tier
 
 _WS = re.compile(r"\s+")
 _PUNCT = re.compile(r"[^\w\s]")
@@ -167,10 +167,10 @@ class MergeResult:
         }
 
 
-def merge_findings(rows: list[dict]) -> MergeResult:
+def merge_findings(rows: list[dict], company_domain: str | None = None) -> MergeResult:
     """Group findings into claims and find the disagreements.
 
-    Each row needs ``field``, ``value``, ``kind``, ``source_url`` and ``source_tier``;
+    Each row needs ``field``, ``value``, ``kind`` and ``source_url``;
     ``finding_id`` and ``branch`` are carried through when present. A field may hold
     several genuine values at once -- a company has many products -- so agreeing values
     merge and differing ones become separate claims, which only count as a conflict
@@ -191,8 +191,14 @@ def merge_findings(rows: list[dict]) -> MergeResult:
 
         if row.get("source_url"):
             target.hosts.add(host_of(row["source_url"]))
-        if row.get("source_tier") is not None:
-            target.tiers.add(row["source_tier"])
+        # Re-derived from the URL rather than read from the row. The host lists
+        # grow as real runs meet real sources -- NHS England sat in the tier-3
+        # default until a run showed it confirming a trust's legal name -- and a
+        # claim's standing should reflect what is known now, not what was known on
+        # the day it was recorded. The stored tier stays as the record of that day.
+        tier = source_tier(row.get("source_url") or "", company_domain)
+        if tier is not None:
+            target.tiers.add(tier)
         if row.get("finding_id") is not None:
             target.finding_ids.append(row["finding_id"])
         if row.get("branch"):
