@@ -23,6 +23,7 @@ from scout.verify import (
     best_match_ratio,
     classify,
     normalise,
+    strip_markdown,
     strip_snapshot_artifacts,
     verify_run,
 )
@@ -128,6 +129,29 @@ def test_an_elided_quote_passes_only_if_every_part_is_present():
         "LAYFIELD, Diana Louise Patricia ... Role RESIGNED Company Secretary", page
     )
     assert verdict is not Verdict.VERBATIM
+
+
+def test_markdown_from_web_fetch_is_reduced_to_its_words():
+    """web_fetch returns pages as Markdown, the browser returns rendered text.
+
+    A real case: the agent quoted "### Products - [Current accounts](https://...)",
+    which no rendered page contains, and was marked a fabrication for it.
+    """
+    page = "Products Current accounts Business accounts Savings"
+    quoted = (
+        "### Products\n- [Current accounts](https://monzo.com/current-account)\n"
+        "- [Business accounts](https://monzo.com/business-banking)\n"
+        "- [Savings](https://monzo.com/savings-isas)"
+    )
+    assert "](" not in strip_markdown(quoted)
+    assert classify(quoted, page)[0] in (Verdict.VERBATIM, Verdict.PARAPHRASE)
+
+
+def test_stripping_markdown_cannot_rescue_an_invented_quote():
+    """The syntax goes; no word is added, so a fabrication still fails."""
+    page = "Products Current accounts Business accounts"
+    invented = "### Products\n- [Mortgages](https://x)\n- [Car insurance](https://y)"
+    assert classify(invented, page)[0] is Verdict.NOT_FOUND
 
 
 def test_a_quote_that_is_only_snapshot_markup_is_no_quote():

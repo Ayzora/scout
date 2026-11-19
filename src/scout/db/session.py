@@ -50,10 +50,39 @@ def init_db(settings: Settings) -> Path:
     existing ones from Alembic (``uv run alembic upgrade head``), with
     ``schema_is_current`` telling the two apart.
     """
+    from sqlalchemy import inspect
+
     engine = get_engine(settings)
     settings.screenshot_dir.mkdir(parents=True, exist_ok=True)
+    was_empty = not inspect(engine).has_table("runs")
     Base.metadata.create_all(engine)
+
+    # A database create_all has just built is, by definition, at the latest schema --
+    # but Alembic has no way to know that, and would report a brand-new install as
+    # predating migrations. Stamping it closes the gap between the two mechanisms.
+    if was_empty:
+        _stamp_head(settings)
     return settings.db_path
+
+
+def _stamp_head(settings: Settings) -> None:
+    """Record the current revision on a database built by ``create_all``."""
+    try:
+        from alembic import command
+        from alembic.config import Config
+    except ImportError:
+        return
+    ini = Path(__file__).resolve().parents[3] / "alembic.ini"
+    if not ini.exists():
+        return
+    try:
+        config = Config(str(ini))
+        config.set_main_option("sqlalchemy.url", settings.db_url)
+        command.stamp(config, "head")
+    except Exception:
+        # Not fatal: the database is usable, and schema_is_current will say what to
+        # run. Failing init over a bookkeeping row would be worse.
+        pass
 
 
 def schema_is_current(settings: Settings) -> tuple[bool, str | None]:

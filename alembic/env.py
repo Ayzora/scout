@@ -23,12 +23,19 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 settings = load_settings()
-config.set_main_option("sqlalchemy.url", settings.db_url)
+
+# A caller that already knows which database it means -- init_db stamping a freshly
+# created one, say -- sets the URL on the config before invoking Alembic. Overriding
+# it here from the environment would silently point those runs at the wrong file.
+if not config.get_main_option("sqlalchemy.url", None):
+    config.set_main_option("sqlalchemy.url", settings.db_url)
+
+DB_URL = config.get_main_option("sqlalchemy.url")
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.db_url,
+        url=DB_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

@@ -73,6 +73,10 @@ def config() -> None:
     table.add_row("task budget (tokens)", str(settings.task_budget_tokens))
     table.add_row("max steps per company", str(settings.max_steps))
     table.add_row("headed browser", str(settings.headed))
+    table.add_row(
+        "respect robots.txt",
+        "True" if settings.respect_robots else "[yellow]False[/yellow]",
+    )
     table.add_row("context editing", str(settings.context_editing))
     table.add_row("page timeout (ms)", str(settings.page_timeout_ms))
     table.add_row("data dir", str(settings.data_dir))
@@ -113,6 +117,11 @@ def research(
         None, "--icp", help="Ideal customer profile as a JSON object."
     ),
     label: str = typer.Option(None, "--label", help="A name for this run."),
+    exploratory: bool = typer.Option(
+        False,
+        "--exploratory",
+        help="Research with no stated goal. Produces a description, not a verdict.",
+    ),
 ) -> None:
     """Research one or more companies."""
     from scout.agent.loop import create_run, finish_run, research_company
@@ -143,6 +152,32 @@ def research(
 
     requested_fields = resolve_fields(fields)
     icp_dict = json.loads(icp) if icp else None
+
+    # A run with no goal has no way to prefer one fact over another, so it spends its
+    # budget on whatever it meets first. That is how a run came back with thirteen
+    # overlapping service descriptions and nobody who works there. The planner is
+    # handed "None given" in that case, which is a instruction to be aimless.
+    if not objectives and not icp_dict and not exploratory:
+        console.print(
+            "[red]This run has no goal.[/red] Scout would research whatever it "
+            "happened to find first.\n\n"
+            "Give it a direction with either:\n"
+            "  [cyan]--objectives[/cyan]  what you want to learn, in your own words\n"
+            "  [cyan]--icp[/cyan]         who you are looking for, as JSON — this "
+            "also scores each company\n\n"
+            "Example:\n"
+            "  scout research -d acme.com \\\n"
+            "    --objectives \"who runs it, how big, and what changed recently\" \\\n"
+            "    --icp '{\"sector\": \"UK healthcare\", \"size\": \"1000+ staff\"}'\n\n"
+            "Or pass [cyan]--exploratory[/cyan] to research without one anyway."
+        )
+        raise typer.Exit(code=2)
+
+    if exploratory and not objectives and not icp_dict:
+        console.print(
+            "[yellow]No goal given.[/yellow] Expect a description rather than a "
+            "verdict, and no qualification score.\n"
+        )
 
     client = _client()
     run_id = create_run(
@@ -348,6 +383,8 @@ def show(
         if cr.summary:
             console.print(cr.summary + "\n")
 
+        _print_qualification(cr.qualification)
+
         table = Table("field", "kind", "value", "source")
         for f in cr.findings:
             table.add_row(
@@ -370,7 +407,50 @@ def show(
             console.print(people)
 
     _print_branch_tree(settings, company_run)
-    _print_assessment(settings, company_run)
+    _print_assessment(settings, company_run, cr.company.domain)
+
+
+_TIER_COLOUR = {
+    "strong": "green",
+    "moderate": "yellow",
+    "weak": "red",
+    "unqualified": "red",
+}
+
+
+def _print_qualification(qualification) -> None:
+    """The verdict, when a run was given an ICP to judge against.
+
+    Without one there is nothing to score, and the run produces a description. Saying
+    so is better than printing a blank section the reader has to interpret.
+    """
+    if qualification is None:
+        console.print(
+            "[dim]No qualification: this run was given no ICP, so nothing was "
+            "scored. Pass --icp to get a verdict.[/dim]\n"
+        )
+        return
+
+    colour = _TIER_COLOUR.get((qualification.tier or "").lower(), "white")
+    score = (
+        f"{qualification.score:.0f}/100" if qualification.score is not None else "—"
+    )
+    console.print(
+        f"[bold]Fit:[/bold] [{colour}]{(qualification.tier or 'unknown').upper()}"
+        f"[/{colour}]  {score}"
+    )
+    if qualification.rationale:
+        console.print(f"  {qualification.rationale}")
+
+    match = qualification.icp_match or {}
+    for label, key, colour in (
+        ("matched", "matched", "green"),
+        ("missed", "missed", "red"),
+    ):
+        values = match.get(key) or []
+        if values:
+            console.print(f"  [{colour}]{label}[/{colour}]: " + "; ".join(values))
+    console.print()
 
 
 def _print_branch_tree(settings, company_run_id: int) -> None:
@@ -406,7 +486,7 @@ def _print_branch_tree(settings, company_run_id: int) -> None:
     render(None, 1)
 
 
-def _print_assessment(settings, company_run_id: int) -> None:
+def _print_assessment(settings, company_run_id: int, domain: str | None = None) -> None:
     """What is corroborated, what rests on one source, and what disagrees."""
     from scout.agent.loop import read_findings
     from scout.agent.merge import merge_findings
@@ -415,7 +495,7 @@ def _print_assessment(settings, company_run_id: int) -> None:
     rows = read_findings(settings, company_run_id)
     if not rows:
         return
-    merged = merge_findings(rows)
+    merged = merge_findings(rows, company_domain=domain)
     stats = merged.stats()
 
     console.print("\n[bold]Assessment[/bold]")

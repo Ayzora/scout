@@ -39,6 +39,10 @@ _REF_MARKER = re.compile(r"\[ref=\d+\]")
 _ROLE_TAG = re.compile(r"<[a-z][a-z0-9-]*>")
 _HREF_ARROW = re.compile(r"\s*->\s*\S+")
 _ELLIPSIS = re.compile(r"\s*(?:\.\.\.|…)\s*")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_MD_HEADING = re.compile(r"(?m)^\s{0,3}#{1,6}\s*")
+_MD_BULLET = re.compile(r"(?m)^\s*[-*+]\s+")
+_MD_EMPHASIS = re.compile(r"(\*\*|__|\*|`)")
 # Typographic variants a page renders one way and a model reproduces another.
 _SUBSTITUTIONS = {
     "‘": "'", "’": "'", "‚": "'", "‛": "'",
@@ -63,6 +67,22 @@ def normalise(text: str) -> str:
     return _WS.sub(" ", text).strip().lower()
 
 
+def strip_markdown(quote: str) -> str:
+    """Reduce Markdown syntax to the words it wraps.
+
+    ``web_fetch`` returns pages as Markdown, so a quote taken that way reads
+    ``### Products - [Current accounts](https://...)`` while the browser's rendered
+    text has only the words. Removing the syntax compares the prose rather than the
+    representation it happened to arrive in. Only syntax goes -- every word survives,
+    so this cannot turn an invented quote into a match.
+    """
+    quote = _MD_LINK.sub(r"\1", quote)
+    quote = _MD_HEADING.sub("", quote)
+    quote = _MD_BULLET.sub("", quote)
+    quote = _MD_EMPHASIS.sub("", quote)
+    return quote
+
+
 def strip_snapshot_artifacts(quote: str) -> str:
     """Remove our own snapshot rendering from a quote.
 
@@ -74,7 +94,7 @@ def strip_snapshot_artifacts(quote: str) -> str:
     quote = _REF_MARKER.sub("", quote)
     quote = _ROLE_TAG.sub("", quote)
     quote = _HREF_ARROW.sub("", quote)
-    return quote.strip(" -")
+    return strip_markdown(quote).strip(" -")
 
 
 def _segments(quote: str) -> list[str]:
@@ -274,6 +294,9 @@ def verify_run(
             screenshot_dir=settings.screenshot_dir,
             headed=False,
             timeout_ms=settings.page_timeout_ms,
+            # Verification re-reads pages the run already read. Holding it to a
+            # stricter rule than the run would report its own evidence unreachable.
+            respect_robots=settings.respect_robots,
         ) as browser:
             run_with(browser)
 

@@ -27,12 +27,11 @@ from anthropic import Anthropic
 from scout.agent.branches import run_branches
 from scout.agent.merge import merge_findings
 from scout.agent.plan import plan_research
-from scout.agent.prompts import DEFAULT_FIELDS, system_prompt
+from scout.agent.prompts import DEFAULT_FIELDS
 from scout.agent.pricing import estimate_cost_usd
 from scout.agent.recorder import Recorder
 from scout.agent.schemas import SynthesisResult
 from scout.agent.synthesize import synthesize
-from scout.agent.tools import SERVER_TOOLS, build_tools
 from scout.browser.session import BrowserSession
 from scout.config import Settings
 from scout.db import models as m
@@ -48,13 +47,14 @@ BETAS = [
 @contextmanager
 def _browser_for(settings: Settings, shot_dir: Path) -> Iterator[BrowserSession | None]:
     """A browser for the browser engine, nothing for the fetch engine."""
-    if settings.engine != "browser":
+    if settings.engine not in ("browser", "browser_toolset"):
         yield None
         return
     with BrowserSession(
         screenshot_dir=shot_dir,
         headed=settings.headed,
         timeout_ms=settings.page_timeout_ms,
+        respect_robots=settings.respect_robots,
     ) as browser:
         yield browser
 
@@ -400,7 +400,7 @@ def research_company(
         # have finished: two branches citing different sources for one fact is
         # exactly the case that matters.
         recorded = read_findings(settings, company_run_id)
-        result.merge = merge_findings(recorded)
+        result.merge = merge_findings(recorded, company_domain=domain)
         result.stats = company_stats(settings, company_run_id, result.merge)
 
         if recorded:

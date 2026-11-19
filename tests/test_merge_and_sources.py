@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from scout.agent.merge import (
     SAME_VALUE_OVERLAP,
-    Claim,
     is_single_valued,
     merge_findings,
     normalise_value,
@@ -287,3 +286,66 @@ def test_empty_input_reports_no_data_rather_than_a_perfect_score():
     result = merge_findings([])
     assert result.claims == []
     assert result.stats()["corroboration_rate"] is None
+
+
+# ---------------------------------------------------- tiers, re-derived at merge
+
+
+def test_national_nhs_bodies_are_registries_but_other_trusts_are_not():
+    """Measured: a run confirmed a trust's legal name from NHS England and from the
+    NHS organisation register, and the claim still read as single-sourced because
+    both hosts fell to the tier-3 default."""
+    from scout.agent.sources import TIER_PRESS, TIER_REGISTRY, source_tier
+
+    assert source_tier("https://www.england.nhs.uk/publication/x", "wmas.nhs.uk") == TIER_REGISTRY
+    assert source_tier("https://www.dsptoolkit.nhs.uk/OrganisationSearch/RYA", "wmas.nhs.uk") == TIER_REGISTRY
+    # A different trust's own website is not a register.
+    assert source_tier("https://www.sandwell.nhs.uk/about", "wmas.nhs.uk") == TIER_PRESS
+
+
+def test_the_tier_is_re_derived_rather_than_read_from_the_row():
+    """The host lists grow as runs meet real sources, so an old claim's standing has
+    to reflect what is known now. The stored tier records only what was known then."""
+    rows = [
+        {
+            "field": "company_name",
+            "value": "West Midlands Ambulance Service University NHS Foundation Trust",
+            "kind": "fact",
+            "source_url": "https://www.england.nhs.uk/publication/wmas",
+            "source_tier": 3,   # what was stored before the host was recognised
+        },
+        {
+            "field": "company_name",
+            "value": "West Midlands Ambulance Service University NHS Foundation Trust",
+            "kind": "fact",
+            "source_url": "https://www.dsptoolkit.nhs.uk/OrganisationSearch/RYA",
+            "source_tier": 3,
+        },
+    ]
+    result = merge_findings(rows, company_domain="wmas.nhs.uk")
+    claim = result.claims[0]
+    assert claim.source_count == 2
+    assert claim.corroborated, "two registry hosts must corroborate each other"
+
+
+def test_the_company_tier_still_needs_the_domain():
+    rows = [
+        {"field": "website", "value": "x", "kind": "fact",
+         "source_url": "https://www.wmas.nhs.uk/about", "source_tier": None},
+        {"field": "website", "value": "x", "kind": "fact",
+         "source_url": "https://en.wikipedia.org/wiki/WMAS", "source_tier": None},
+    ]
+    merged = merge_findings(rows, company_domain="wmas.nhs.uk")
+    assert merged.claims[0].corroborated
+    # Without the domain the company's own site is just another host.
+    assert not merge_findings(rows).claims[0].corroborated
+
+
+def test_two_aggregators_still_do_not_corroborate_each_other():
+    rows = [
+        {"field": "company_size", "value": "7000", "kind": "fact",
+         "source_url": "https://en.wikipedia.org/wiki/X", "source_tier": None},
+        {"field": "company_size", "value": "7000", "kind": "fact",
+         "source_url": "https://www.crunchbase.com/organization/x", "source_tier": None},
+    ]
+    assert not merge_findings(rows, company_domain="x.com").claims[0].corroborated
