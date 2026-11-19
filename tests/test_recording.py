@@ -93,14 +93,18 @@ def test_finding_is_stored_with_its_evidence(ctx, fixture_site):
     _call(tools, "browser_goto", url=f"{fixture_site}/about.html")
     msg = _call(
         tools,
-        "record_finding",
-        field="headquarters_location",
-        value="Coventry, United Kingdom",
-        kind="fact",
-        evidence_url=f"{fixture_site}/about.html",
-        evidence_quote="Headquarters: Coventry, United Kingdom",
+        "record_findings",
+        findings=[
+            {
+                "field": "headquarters_location",
+                "value": "Coventry, United Kingdom",
+                "kind": "fact",
+                "evidence_url": f"{fixture_site}/about.html",
+                "evidence_quote": "Headquarters: Coventry, United Kingdom",
+            }
+        ],
     )
-    assert "Recorded fact" in msg
+    assert "Recorded 1 finding(s)." in msg
     assert "WARNING" not in msg
 
     with session_scope(settings) as s:
@@ -121,12 +125,16 @@ def test_invented_source_url_is_flagged(ctx, fixture_site):
     _call(tools, "browser_goto", url=f"{fixture_site}/index.html")
     msg = _call(
         tools,
-        "record_finding",
-        field="industry",
-        value="Aerospace",
-        kind="fact",
-        evidence_url="https://totally-different-site.example/about",
-        evidence_quote="We are an aerospace company",
+        "record_findings",
+        findings=[
+            {
+                "field": "industry",
+                "value": "Aerospace",
+                "kind": "fact",
+                "evidence_url": "https://totally-different-site.example/about",
+                "evidence_quote": "We are an aerospace company",
+            }
+        ],
     )
     assert "WARNING" in msg
     assert "not a page this session opened" in msg
@@ -139,12 +147,16 @@ def test_same_host_other_page_is_not_flagged(ctx, fixture_site):
     _call(tools, "browser_goto", url=f"{fixture_site}/index.html")
     msg = _call(
         tools,
-        "record_finding",
-        field="careers",
-        value="Hiring a CTO",
-        kind="fact",
-        evidence_url=f"{fixture_site}/careers.html",
-        evidence_quote="We are hiring a Chief Technology Officer.",
+        "record_findings",
+        findings=[
+            {
+                "field": "careers",
+                "value": "Hiring a CTO",
+                "kind": "fact",
+                "evidence_url": f"{fixture_site}/careers.html",
+                "evidence_quote": "We are hiring a Chief Technology Officer.",
+            }
+        ],
     )
     assert "WARNING" not in msg
 
@@ -157,12 +169,16 @@ def test_unknown_kind_is_rejected_by_the_schema(ctx):
     with pytest.raises(ValueError, match="Invalid arguments"):
         _call(
             tools,
-            "record_finding",
-            field="industry",
-            value="unclear",
-            kind="unknown",
-            evidence_url="https://x.example",
-            evidence_quote="q",
+            "record_findings",
+            findings=[
+                {
+                    "field": "industry",
+                    "value": "unclear",
+                    "kind": "unknown",
+                    "evidence_url": "https://x.example",
+                    "evidence_quote": "q",
+                }
+            ],
         )
     with session_scope(settings) as s:
         assert s.query(m.Finding).count() == 0
@@ -220,19 +236,111 @@ def test_step_limit_stops_the_agent(ctx, fixture_site):
     assert "finish_research" in out
 
 
+def test_batch_keeps_per_finding_evidence(ctx, fixture_site):
+    """Batching cuts turns, not traceability: each claim keeps its own source."""
+    settings, recorder, tools, cr_id = ctx
+    _call(tools, "browser_goto", url=f"{fixture_site}/about.html")
+    _call(tools, "browser_goto", url=f"{fixture_site}/careers.html")
+    msg = _call(
+        tools,
+        "record_findings",
+        findings=[
+            {
+                "field": "headquarters_location",
+                "value": "Coventry, United Kingdom",
+                "kind": "fact",
+                "evidence_url": f"{fixture_site}/about.html",
+                "evidence_quote": "Headquarters: Coventry, United Kingdom",
+            },
+            {
+                "field": "open_roles",
+                "value": "Chief Technology Officer",
+                "kind": "fact",
+                "evidence_url": f"{fixture_site}/careers.html",
+                "evidence_quote": "We are hiring a Chief Technology Officer.",
+            },
+        ],
+    )
+    assert "Recorded 2 finding(s)." in msg
+
+    with session_scope(settings) as s:
+        findings = (
+            s.query(m.Finding).filter(m.Finding.company_run_id == cr_id).all()
+        )
+        assert len(findings) == 2
+        sources = {f.field: f.evidence[0].source_url for f in findings}
+        assert sources["headquarters_location"].endswith("/about.html")
+        assert sources["open_roles"].endswith("/careers.html")
+
+    # Two findings, one step.
+    with session_scope(settings) as s:
+        steps = (
+            s.query(m.Step)
+            .filter(
+                m.Step.company_run_id == cr_id,
+                m.Step.tool_name == "record_findings",
+            )
+            .all()
+        )
+        assert len(steps) == 1
+
+
+def test_one_bad_entry_does_not_discard_the_rest(ctx, fixture_site):
+    """A rejected entry must not take the whole page's findings down with it."""
+    settings, recorder, tools, cr_id = ctx
+    _call(tools, "browser_goto", url=f"{fixture_site}/about.html")
+    msg = _call(
+        tools,
+        "record_findings",
+        findings=[
+            {
+                "field": "industry",
+                "value": "Industrial IoT",
+                "kind": "fact",
+                "evidence_url": f"{fixture_site}/about.html",
+                "evidence_quote": "Industry: Industrial IoT hardware manufacturing",
+            },
+            {
+                "field": "confidence_out_of_range",
+                "value": "x",
+                "kind": "fact",
+                "evidence_url": f"{fixture_site}/about.html",
+                "evidence_quote": "q",
+                "confidence": 4.2,
+            },
+        ],
+    )
+    assert "Recorded 1 finding(s)." in msg
+    assert "NOT RECORDED" in msg
+    with session_scope(settings) as s:
+        assert s.query(m.Finding).filter(
+            m.Finding.company_run_id == cr_id
+        ).count() == 1
+
+
 def test_stats_report_evidence_coverage(ctx, fixture_site):
     settings, recorder, tools, cr_id = ctx
     _call(tools, "browser_goto", url=f"{fixture_site}/about.html")
     _call(
-        tools, "record_finding", field="industry", value="Industrial IoT",
-        kind="fact", evidence_url=f"{fixture_site}/about.html",
-        evidence_quote="Industry: Industrial IoT hardware manufacturing",
-    )
-    _call(
-        tools, "record_finding", field="expansion", value="Growing in Leeds",
-        kind="inference", evidence_url=f"{fixture_site}/about.html",
-        evidence_quote="Active markets: United Kingdom, Germany and Poland",
-        reason="markets list implies expansion",
+        tools,
+        "record_findings",
+        findings=[
+            {
+                "field": "industry",
+                "value": "Industrial IoT",
+                "kind": "fact",
+                "evidence_url": f"{fixture_site}/about.html",
+                "evidence_quote": "Industry: Industrial IoT hardware manufacturing",
+            },
+            {
+                "field": "expansion",
+                "value": "Growing in Leeds",
+                "kind": "inference",
+                "evidence_url": f"{fixture_site}/about.html",
+                "evidence_quote": "Active markets: United Kingdom, Germany and Poland",
+                "reason": "markets list implies expansion",
+            },
+        ],
     )
     _call(tools, "mark_unknown", field="revenue", reason="not published")
 

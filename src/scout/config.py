@@ -15,6 +15,11 @@ MIN_TASK_BUDGET_TOKENS = 20_000
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
+# "browser" drives a real Chromium; "fetch" has no browser and uses only the
+# server-side web tools. See build_tools in agent/tools.py.
+VALID_ENGINES = ("browser", "fetch")
+DEFAULT_ENGINE = "browser"
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -39,6 +44,8 @@ class Settings:
 
     model: str
     effort: str
+    engine: str
+    synthesis_model: str
     task_budget_tokens: int
     headed: bool
     context_editing: bool
@@ -62,10 +69,8 @@ class Settings:
     def api_key() -> str | None:
         """Read lazily, so commands that need no API key still run without one.
 
-        The placeholder shipped in ``.env.example`` is treated as absent. Without
-        this, a fresh install (where install.sh copies the example file) would send
-        ``sk-ant-...`` to the API and surface an authentication error instead of the
-        message telling the user to add their key.
+        The ``.env.example`` placeholder counts as absent, so a fresh install reports
+        a missing key rather than an authentication error.
         """
         raw = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
         if not raw or "..." in raw:
@@ -74,13 +79,22 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    effort = os.getenv("SCOUT_EFFORT", "high").strip().lower()
+    model = os.getenv("SCOUT_MODEL", "claude-haiku-5-5").strip()
+    effort = os.getenv("SCOUT_EFFORT", "medium").strip().lower()
     if effort not in VALID_EFFORTS:
         raise ValueError(
             f"SCOUT_EFFORT must be one of {', '.join(VALID_EFFORTS)}, got {effort!r}"
         )
 
-    budget = _env_int("SCOUT_TASK_BUDGET_TOKENS", 120_000)
+    engine = os.getenv("SCOUT_ENGINE", DEFAULT_ENGINE).strip().lower()
+    if engine not in VALID_ENGINES:
+        raise ValueError(
+            f"SCOUT_ENGINE must be one of {', '.join(VALID_ENGINES)}, got {engine!r}"
+        )
+
+    # The main scope throttle: a larger budget means the agent keeps researching
+    # past the objective.
+    budget = _env_int("SCOUT_TASK_BUDGET_TOKENS", 40_000)
     if budget < MIN_TASK_BUDGET_TOKENS:
         raise ValueError(
             f"SCOUT_TASK_BUDGET_TOKENS must be at least {MIN_TASK_BUDGET_TOKENS}, got {budget}"
@@ -89,12 +103,13 @@ def load_settings() -> Settings:
     data_dir = Path(os.getenv("SCOUT_DATA_DIR", "./data")).expanduser().resolve()
 
     return Settings(
-        model=os.getenv("SCOUT_MODEL", "claude-opus-5-5").strip(),
+        model=model,
         effort=effort,
+        engine=engine,
+        synthesis_model=os.getenv("SCOUT_SYNTHESIS_MODEL", model).strip(),
         task_budget_tokens=budget,
         headed=_env_bool("SCOUT_HEADED", True),
-        # Off by default: it fights prompt caching and only earns its keep near the
-        # context window. See context_management_arg in agent/loop.py.
+        # Off deliberately -- see context_management_arg in agent/loop.py.
         context_editing=_env_bool("SCOUT_CONTEXT_EDITING", False),
         max_steps=_env_int("SCOUT_MAX_STEPS", 60),
         page_timeout_ms=_env_int("SCOUT_PAGE_TIMEOUT_MS", 20_000),

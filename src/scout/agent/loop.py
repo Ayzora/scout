@@ -16,13 +16,15 @@ Two details worth knowing:
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, Iterator
 
 from anthropic import Anthropic
 
-from scout.agent.prompts import DEFAULT_FIELDS, SYSTEM_PROMPT, build_company_brief
+from scout.agent.prompts import DEFAULT_FIELDS, build_company_brief, system_prompt
 from scout.agent.pricing import estimate_cost_usd
 from scout.agent.recorder import Recorder
 from scout.agent.schemas import SynthesisResult
@@ -40,18 +42,27 @@ BETAS = [
 ]
 
 
+@contextmanager
+def _browser_for(settings: Settings, shot_dir: Path) -> Iterator[BrowserSession | None]:
+    """A browser for the browser engine, nothing for the fetch engine."""
+    if settings.engine != "browser":
+        yield None
+        return
+    with BrowserSession(
+        screenshot_dir=shot_dir,
+        headed=settings.headed,
+        timeout_ms=settings.page_timeout_ms,
+    ) as browser:
+        yield browser
+
+
 def context_management_arg(settings: Settings) -> dict[str, Any]:
-    """Context editing, which is off unless a company genuinely needs it.
+    """Context editing, off unless explicitly enabled.
 
-    This is a context-*window* tool, not a cost lever, and it is easy to mistake for
-    one. Each clearing pass rewrites the conversation the cache was built from, so the
-    next turn pays to write the whole thing again. Anthropic's own measured run found
-    it cost more than it saved.
-
-    Scout's loop peaked near 35k tokens against a 1M window, so there was nothing to
-    make room for and the clears were pure loss. Turn it on only for a site deep
-    enough to approach the window, and give it a trigger high enough that clears stay
-    rare; ``clear_at_least`` then skips a clear too small to be worth the rewrite.
+    It makes room in the context window; it does not save money. Each clearing pass
+    rewrites the conversation the cache was built from, so the next turn pays to write
+    it again. Only worth enabling for runs that approach the window, with a high
+    trigger so clears stay rare.
     """
     if not settings.context_editing:
         return {}
@@ -89,8 +100,7 @@ class Usage:
         self.output_tokens += getattr(usage, "output_tokens", 0) or 0
         self.cache_read_tokens += getattr(usage, "cache_read_input_tokens", 0) or 0
         self.cache_write_tokens += getattr(usage, "cache_creation_input_tokens", 0) or 0
-        # Web searches are billed per request, not per token, so a token-only
-        # tally silently omits them.
+        # Billed per request, not per token.
         server = getattr(usage, "server_tool_use", None)
         if server is not None:
             self.web_searches += getattr(server, "web_search_requests", 0) or 0
@@ -180,6 +190,7 @@ def create_run(
             icp=icp,
             model=settings.model,
             effort=settings.effort,
+            engine=settings.engine,
             status=m.Status.RUNNING.value,
         )
         s.add(run)
@@ -222,11 +233,7 @@ def research_company(
     )
 
     try:
-        with BrowserSession(
-            screenshot_dir=shot_dir,
-            headed=settings.headed,
-            timeout_ms=settings.page_timeout_ms,
-        ) as browser:
+        with _browser_for(settings, shot_dir) as browser:
             recorder = Recorder(settings=settings, company_run_id=company_run_id)
             tools = build_tools(
                 session=browser, recorder=recorder, settings=settings
@@ -243,23 +250,14 @@ def research_company(
             runner = client.beta.messages.tool_runner(
                 model=settings.model,
                 max_tokens=MAX_TOKENS_PER_TURN,
-                # Two breakpoints, because an agent loop has two stability layers.
-                #
-                # 1. The explicit one below pins the system prompt + tool list, which
-                #    never change, so the prefix is reused across every company.
-                # 2. This top-level one auto-places a breakpoint on the last block of
-                #    the request and moves it forward as the conversation grows, so
-                #    turn N reads turn N-1's whole context from cache.
-                #
-                # Without (2) the entire growing conversation was re-read as fresh
-                # input on all 47 turns of the monzo.com run -- 321k tokens at the
-                # full input rate instead of the cache-read rate, which was 51% of
-                # that run's cost on its own.
+                # Caches the growing conversation tail. Required in addition to the
+                # system breakpoint below: without it every turn re-reads the whole
+                # conversation at the full input rate.
                 cache_control={"type": "ephemeral"},
                 system=[
                     {
                         "type": "text",
-                        "text": SYSTEM_PROMPT,
+                        "text": system_prompt(settings.engine),
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -326,17 +324,22 @@ def research_company(
         result.error = f"{type(exc).__name__}: {exc}"
 
     result.duration_s = time.monotonic() - started
-    # Research and synthesis are billed separately so each phase's share is visible;
-    # the stored total is both.
     total = usage.merge(synthesis_usage)
     result.usage = total.as_dict()
     result.usage["research_cost_usd"] = estimate_cost_usd(
         model=settings.model, **usage.billable()
     )
+    # Priced on its own model, which may differ from the research model.
     result.usage["synthesis_cost_usd"] = estimate_cost_usd(
-        model=settings.model, **synthesis_usage.billable()
+        model=settings.synthesis_model, **synthesis_usage.billable()
     )
-    result.cost_usd = estimate_cost_usd(model=settings.model, **total.billable())
+    research_cost = result.usage["research_cost_usd"]
+    synthesis_cost = result.usage["synthesis_cost_usd"]
+    result.cost_usd = (
+        None
+        if research_cost is None or synthesis_cost is None
+        else research_cost + synthesis_cost
+    )
 
     _persist_company_run(settings, result)
     return result

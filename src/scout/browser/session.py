@@ -57,7 +57,9 @@ _NAV_HINTS = (
     "press", "blog", "locations", "offices",
 )
 
-_SNAPSHOT_CHAR_CAP = 14_000
+# Page text is the largest cost line in a run, so this is a budget as much as a limit.
+# Truncation is reported to the agent, which can scroll or open a narrower page.
+_SNAPSHOT_CHAR_CAP = 8_000
 
 _JS_SNAPSHOT = """
 () => {
@@ -92,10 +94,26 @@ _JS_SNAPSHOT = """
   const INTERACTIVE = %INTERACTIVE%;
   const TEXTUAL = 'h1, h2, h3, h4, h5, h6, p, li, td, th, dt, dd, blockquote, figcaption, address, label, span[class*=price], strong';
 
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+  // Site chrome: the same nav, footer and cookie notice on every page of a site.
+  // Its *prose* is pure cost -- it enters context at the cache-write rate on every
+  // page load and tells us nothing about the company. Its *links* are how the agent
+  // gets around, so interactive elements here are kept and only text is dropped.
+  const CHROME = 'nav, footer, [role=navigation], [role=contentinfo], ' +
+    '[class*=cookie], [id*=cookie], [class*=consent], [id*=consent], ' +
+    '[class*=gdpr], [id*=gdpr], [class*=breadcrumb], [class*=skip-link]';
+
+  // When a page marks its own main content, trust it and read only that. This is the
+  // largest single saving on a content-heavy page.
+  const mainEl = document.querySelector('main, article, [role=main]');
+  const mainHasSubstance = mainEl && visible(mainEl) &&
+    (mainEl.innerText || '').trim().length > 200;
+  const contentRoot = mainHasSubstance ? mainEl : null;
+
   const out = [];
-  let node = document.body;
   const all = [document.body, ...document.body.querySelectorAll('*')];
+  const seenLabels = new Set();
+  let droppedChrome = 0;
+  let droppedDuplicate = 0;
 
   for (const el of all) {
     if (!visible(el)) continue;
@@ -104,10 +122,16 @@ _JS_SNAPSHOT = """
     const isTextual = el.matches(TEXTUAL);
     if (!isInteractive && !isTextual) continue;
 
-    // Skip a textual node whose text is already covered by a textual ancestor.
     if (isTextual && !isInteractive) {
+      // Skip a textual node whose text is already covered by a textual ancestor.
       const parentTextual = el.parentElement && el.parentElement.closest(TEXTUAL);
       if (parentTextual && parentTextual !== el) continue;
+
+      // Boilerplate prose: drop it, keep counting so the agent is told.
+      if (el.closest(CHROME)) { droppedChrome += 1; continue; }
+
+      // Outside the page's own main content, when it declared one.
+      if (contentRoot && !contentRoot.contains(el)) { droppedChrome += 1; continue; }
     }
 
     const label = name(el);
@@ -122,6 +146,10 @@ _JS_SNAPSHOT = """
       if (el.disabled) entry.disabled = true;
       out.push(entry);
     } else {
+      // Card grids and link lists repeat the same phrase many times over.
+      const key = tag + '\\u0000' + label;
+      if (seenLabels.has(key)) { droppedDuplicate += 1; continue; }
+      seenLabels.add(key);
       out.push({ tag, label, role: tag });
     }
   }
@@ -131,6 +159,9 @@ _JS_SNAPSHOT = """
     url: location.href,
     bodyText: clean(document.body.innerText).slice(0, 200),
     nodes: out,
+    droppedChrome,
+    droppedDuplicate,
+    scopedToMain: Boolean(contentRoot),
   };
 }
 """.replace("%INTERACTIVE%", repr(_INTERACTIVE_JS_ROLES))
@@ -327,6 +358,18 @@ class BrowserSession:
         if truncated:
             body = body[: self.snapshot_cap]
 
+        # Report the filtering, so a missing detail is explicable to the agent
+        # rather than a silent gap.
+        dropped: list[str] = []
+        if data.get("scopedToMain"):
+            dropped.append("read the page's own <main> content")
+        if data.get("droppedChrome"):
+            dropped.append(f"skipped {data['droppedChrome']} nav/footer/cookie text nodes")
+        if data.get("droppedDuplicate"):
+            dropped.append(f"merged {data['droppedDuplicate']} repeated lines")
+
+        notes = [n for n in (reason or note, "; ".join(dropped) or None) if n]
+
         return PageView(
             url=data.get("url") or self.current_url,
             title=data.get("title") or "",
@@ -334,7 +377,7 @@ class BrowserSession:
             screenshot_path=self.screenshot(),
             truncated=truncated,
             blocked=blocked,
-            note=reason or note,
+            note=" | ".join(notes) or None,
         )
 
     def _detect_block(self, data: dict) -> tuple[bool, str | None]:

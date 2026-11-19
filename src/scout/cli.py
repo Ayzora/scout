@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from scout.agent.prompts import FIELD_PRESETS, resolve_fields
 from scout.config import load_settings
 from scout.db.session import init_db
 from scout.export import export_run_csv
@@ -53,8 +54,11 @@ def config() -> None:
     """Show the resolved configuration."""
     settings = load_settings()
     table = Table(show_header=False, box=None)
+    table.add_row("engine", settings.engine)
     table.add_row("model", settings.model)
+    table.add_row("synthesis model", settings.synthesis_model)
     table.add_row("effort", settings.effort)
+    table.add_row("default fields", ", ".join(FIELD_PRESETS["core"]))
     table.add_row("task budget (tokens)", str(settings.task_budget_tokens))
     table.add_row("max steps per company", str(settings.max_steps))
     table.add_row("headed browser", str(settings.headed))
@@ -79,7 +83,12 @@ def research(
         None, "--objectives", "-o", help="What you want to learn about each company."
     ),
     fields: str = typer.Option(
-        None, "--fields", help="Comma-separated list of fields to populate."
+        None,
+        "--fields",
+        help=(
+            "Fields to populate: a preset (core, full) or a comma-separated list. "
+            "Defaults to core -- let --objectives drive anything beyond it."
+        ),
     ),
     icp: str = typer.Option(
         None, "--icp", help="Ideal customer profile as a JSON object."
@@ -99,9 +108,7 @@ def research(
         console.print("[red]Give at least one --domain or a --csv file.[/red]")
         raise typer.Exit(code=2)
 
-    requested_fields = (
-        [f.strip() for f in fields.split(",") if f.strip()] if fields else None
-    )
+    requested_fields = resolve_fields(fields)
     icp_dict = json.loads(icp) if icp else None
 
     client = _client()
@@ -114,6 +121,7 @@ def research(
     )
     console.print(
         f"[bold]Run {run_id}[/bold] — {len(targets)} companies, "
+        f"{settings.engine} engine, "
         f"model {settings.model} at effort {settings.effort}\n"
     )
 
@@ -146,6 +154,15 @@ def research(
                     else ""
                 )
             )
+            usage = result.usage or {}
+            research = usage.get("research_cost_usd")
+            synth = usage.get("synthesis_cost_usd")
+            if research is not None and synth is not None:
+                console.print(
+                    f"  [dim]{usage.get('turns', 0)} turns · "
+                    f"research ${research:.3f} · synthesis ${synth:.3f} · "
+                    f"{usage.get('web_searches', 0)} web searches[/dim]"
+                )
 
     finish_run(settings, run_id)
     _print_summary(results)
@@ -227,10 +244,27 @@ def _read_csv(path: Path) -> list[tuple[str, str | None]]:
 
 
 def _print_summary(results) -> None:
-    table = Table("domain", "status", "facts", "inf", "unk", "coverage", "time", "cost")
+    table = Table(
+        "domain",
+        "status",
+        "facts",
+        "inf",
+        "unk",
+        "coverage",
+        "time",
+        "turns",
+        "research",
+        "synth",
+        "cost",
+    )
     for r in results:
         stats = r.stats or {}
+        usage = r.usage or {}
         coverage = stats.get("evidence_coverage")
+
+        def money(value) -> str:
+            return f"${value:.3f}" if value is not None else "-"
+
         table.add_row(
             r.domain,
             r.status,
@@ -239,7 +273,10 @@ def _print_summary(results) -> None:
             str(stats.get("unknowns", 0)),
             f"{coverage:.0%}" if coverage is not None else "-",
             f"{r.duration_s:.0f}s" if r.duration_s else "-",
-            f"${r.cost_usd:.3f}" if r.cost_usd is not None else "-",
+            str(usage.get("turns", "-")),
+            money(usage.get("research_cost_usd")),
+            money(usage.get("synthesis_cost_usd")),
+            money(r.cost_usd),
         )
     console.print()
     console.print(table)

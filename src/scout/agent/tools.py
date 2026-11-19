@@ -17,6 +17,7 @@ import time
 from typing import Any, Literal
 
 from anthropic import beta_tool
+from pydantic import BaseModel
 
 from scout.agent.recorder import Recorder
 from scout.browser.session import BrowserSession, PageView
@@ -24,6 +25,22 @@ from scout.config import Settings
 
 WEB_SEARCH_MAX_USES = 8
 WEB_FETCH_MAX_USES = 8
+
+# Unset, a single fetch can put an unbounded page into context. Roughly matched to
+# the browser's snapshot cap so the two engines cost comparable amounts per page.
+WEB_FETCH_MAX_CONTENT_TOKENS = 4_000
+
+
+class FindingInput(BaseModel):
+    """One observed claim, as the agent reports it."""
+
+    field: str
+    value: str
+    kind: Literal["fact", "inference"]
+    evidence_url: str
+    evidence_quote: str
+    confidence: float | None = None
+    reason: str | None = None
 
 SERVER_TOOLS: list[dict[str, Any]] = [
     {
@@ -35,6 +52,7 @@ SERVER_TOOLS: list[dict[str, Any]] = [
         "type": "web_fetch_20260209",
         "name": "web_fetch",
         "max_uses": WEB_FETCH_MAX_USES,
+        "max_content_tokens": WEB_FETCH_MAX_CONTENT_TOKENS,
         "citations": {"enabled": True},
     },
 ]
@@ -53,11 +71,18 @@ def _image_block(png: bytes) -> dict[str, Any]:
 
 def build_tools(
     *,
-    session: BrowserSession,
+    session: BrowserSession | None,
     recorder: Recorder,
     settings: Settings,
 ) -> list[Any]:
-    """Construct the agent's client-side tools, bound to this company's context."""
+    """Construct the agent's client-side tools, bound to this company's context.
+
+    The engine is a choice of tool surface: ``browser`` adds the Playwright tools,
+    ``fetch`` works through the server-side tools alone. Both get the same recording
+    surface, so their findings are directly comparable.
+    """
+    if settings.engine == "browser" and session is None:
+        raise ValueError("the browser engine needs a BrowserSession")
 
     def _budget_exhausted() -> str | None:
         if recorder.step_count >= settings.max_steps:
@@ -264,56 +289,67 @@ def build_tools(
     # ---------------------------------------------------------------- recording
 
     @beta_tool
-    def record_finding(
-        field: str,
-        value: str,
-        kind: Literal["fact", "inference"],
-        evidence_url: str,
-        evidence_quote: str,
-        confidence: float | None = None,
-        reason: str | None = None,
-    ) -> str:
-        """Record one piece of information about the company, with its source.
+    def record_findings(findings: list[FindingInput]) -> str:
+        """Record everything you have just observed on the page in front of you.
 
-        Call this the moment you observe something, while the page is still open. You may
-        call it several times for the same field -- for a list of products, one call per
-        product is better than one call with everything in a single string.
+        Record while the page is still open, then move on. Put every claim from this
+        page in a single call: one call per page, not one call per claim. Each entry
+        still carries its own source URL and quote, so a page that confirms eight
+        things produces eight sourced findings from one call.
+
+        Do not save these up across pages or to the end of the run. A claim written
+        from memory after you have navigated away is the thing this tool exists to
+        prevent.
 
         Args:
-            field: The field being populated, such as industry or headquarters_location.
-            value: The value, as a short readable string.
-            kind: "fact" if the page states it directly, "inference" if you are
-                concluding it from indirect signals.
-            evidence_url: The URL of the page you actually saw this on.
-            evidence_quote: The wording on that page that supports it. Quote it; do not
-                paraphrase.
-            confidence: Optional 0.0-1.0 confidence, most useful for inferences.
-            reason: For an inference, how you reached it.
+            findings: Every claim observed on the current page. For a list of
+                products, that is one entry per product, all in this one call.
         """
-        try:
-            finding_id, warning = recorder.record_finding(
-                field_name=field,
-                value=value,
-                kind=kind,
-                evidence_url=evidence_url,
-                evidence_quote=evidence_quote,
-                confidence=confidence,
-                reason=reason,
-            )
-        except ValueError as exc:
-            return f"Not recorded: {exc}"
+        if not findings:
+            return "Nothing recorded: the findings list was empty."
+
+        recorded: list[int] = []
+        warnings: list[str] = []
+        rejected: list[str] = []
+
+        for item in findings:
+            try:
+                finding_id, warning = recorder.record_finding(
+                    field_name=item.field,
+                    value=item.value,
+                    kind=item.kind,
+                    evidence_url=item.evidence_url,
+                    evidence_quote=item.evidence_quote,
+                    confidence=item.confidence,
+                    reason=item.reason,
+                )
+            except ValueError as exc:
+                # One bad entry must not discard the good ones in the same call.
+                rejected.append(f"{item.field!r}: {exc}")
+                continue
+            recorded.append(finding_id)
+            if warning:
+                warnings.append(f"{item.field!r}: {warning}")
 
         recorder.log_step(
             step_type="tool_result",
-            tool_name="record_finding",
-            tool_input={"field": field, "value": value, "kind": kind},
-            output_summary=f"finding {finding_id} recorded"
-            + (f" (warning: {warning})" if warning else ""),
-            url=evidence_url,
+            tool_name="record_findings",
+            tool_input={
+                "count": len(findings),
+                "fields": [item.field for item in findings],
+            },
+            output_summary=(
+                f"{len(recorded)} recorded, {len(rejected)} rejected"
+                + (f", {len(warnings)} warned" if warnings else "")
+            ),
+            url=findings[0].evidence_url,
         )
-        msg = f"Recorded {kind} for {field!r} (finding {finding_id})."
-        if warning:
-            msg += f" WARNING: {warning}"
+
+        msg = f"Recorded {len(recorded)} finding(s)."
+        if warnings:
+            msg += " WARNINGS: " + "; ".join(warnings)
+        if rejected:
+            msg += " NOT RECORDED: " + "; ".join(rejected)
         return msg
 
     @beta_tool
@@ -406,6 +442,12 @@ def build_tools(
             "Do not call any more tools."
         )
 
+    recording = [record_findings, mark_unknown, record_person, finish_research]
+
+    if settings.engine == "fetch":
+        # No browser tools; the model works through SERVER_TOOLS alone.
+        return recording
+
     return [
         browser_goto,
         browser_snapshot,
@@ -414,8 +456,5 @@ def build_tools(
         browser_scroll,
         browser_back,
         browser_find_links,
-        record_finding,
-        mark_unknown,
-        record_person,
-        finish_research,
+        *recording,
     ]

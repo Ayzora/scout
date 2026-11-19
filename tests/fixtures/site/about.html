@@ -2,10 +2,42 @@
 <html lang="en">
 <head><meta charset="utf-8"><title>Northwind Sensors — About</title></head>
 <body>
-  <h1>About Northwind Sensors</h1>
-  <div id="facts">Loading company details…</div>
-  <button id="show-team">Meet the team</button>
-  <div id="team-area"></div>
+  <!-- Site chrome. Repeated on every page of a real site, so its prose is pure cost:
+       it enters the model's context at the cache-write rate on every page load and
+       says nothing about the company. The links, though, are how the agent navigates,
+       so the snapshot must drop the text and keep the links. -->
+  <div id="cookie-banner">
+    <p>We use cookies to improve your experience. By continuing to browse this site
+    you agree to our use of cookies for analytics and personalisation purposes.</p>
+    <button id="accept-cookies">Accept all cookies</button>
+  </div>
+  <nav aria-label="Main navigation">
+    <ul>
+      <li><a href="/index.html">Home</a></li>
+      <li><a href="/about.html">About</a></li>
+      <li><a href="/careers.html">Careers</a></li>
+      <li><a href="/blog.html">Blog</a></li>
+    </ul>
+    <p>Navigate our site using the links above to learn more about what we do.</p>
+  </nav>
+
+  <main>
+    <h1>About Northwind Sensors</h1>
+    <div id="facts">Loading company details…</div>
+    <button id="show-team">Meet the team</button>
+    <!-- Inside <main> on purpose: click-revealed content must survive the filter. -->
+    <div id="team-area"></div>
+  </main>
+
+  <footer>
+    <p>Northwind Sensors Ltd is a company registered in England and Wales. All rights
+    reserved. Reproduction in whole or in part without written permission is
+    prohibited. Our terms of service and privacy policy apply to all visitors.</p>
+    <p>Follow us on social media for the latest updates and announcements.</p>
+    <a href="/privacy.html">Privacy policy</a>
+    <a href="/terms.html">Terms of service</a>
+  </footer>
+
   <script>
     let loaded = null;
     fetch('/data.json').then(r => r.json()).then(d => {

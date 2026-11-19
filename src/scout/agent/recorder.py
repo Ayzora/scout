@@ -121,6 +121,13 @@ class Recorder:
                 f"kind must be 'fact' or 'inference' (use mark_unknown for unknowns), "
                 f"got {kind!r}"
             )
+        # Checked here, not left to the table's CHECK constraint: that raises
+        # IntegrityError, which aborts the run instead of giving the model something
+        # it can correct.
+        if confidence is not None and not 0.0 <= confidence <= 1.0:
+            raise ValueError(
+                f"confidence must be between 0.0 and 1.0, got {confidence!r}"
+            )
         warning = self._provenance_warning(evidence_url)
 
         with session_scope(self.settings) as s:

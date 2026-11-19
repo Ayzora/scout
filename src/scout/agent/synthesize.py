@@ -58,9 +58,17 @@ def synthesize(
     }
 
     response = client.messages.parse(
-        model=settings.model,
+        model=settings.synthesis_model,
         max_tokens=16_000,
-        system=SYNTHESIS_SYSTEM,
+        # The instructions never change, so they are worth a breakpoint even though
+        # the findings payload after them differs every time.
+        system=[
+            {
+                "type": "text",
+                "text": SYNTHESIS_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=[
             {
                 "role": "user",

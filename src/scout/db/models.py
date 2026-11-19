@@ -98,6 +98,9 @@ class Run(Base, TimestampMixin):
 
     model: Mapped[str] = mapped_column(String(128))
     effort: Mapped[str] = mapped_column(String(16))
+    # "browser" or "fetch". Stored so a finished run can be attributed to the engine
+    # that produced it, which the evaluation compares.
+    engine: Mapped[str] = mapped_column(String(16), default="browser")
 
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
