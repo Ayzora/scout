@@ -24,7 +24,10 @@ from typing import Any, Iterator
 
 from anthropic import Anthropic
 
-from scout.agent.prompts import DEFAULT_FIELDS, build_company_brief, system_prompt
+from scout.agent.branches import run_branches
+from scout.agent.merge import merge_findings
+from scout.agent.plan import plan_research
+from scout.agent.prompts import DEFAULT_FIELDS, system_prompt
 from scout.agent.pricing import estimate_cost_usd
 from scout.agent.recorder import Recorder
 from scout.agent.schemas import SynthesisResult
@@ -105,6 +108,15 @@ class Usage:
         if server is not None:
             self.web_searches += getattr(server, "web_search_requests", 0) or 0
 
+    def merge_into(self, other: "Usage") -> None:
+        """Fold another phase's usage into this one, in place."""
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.cache_write_tokens += other.cache_write_tokens
+        self.web_searches += other.web_searches
+        self.turns += other.turns
+
     def merge(self, other: "Usage") -> "Usage":
         """Combine two phases into one total."""
         return Usage(
@@ -142,6 +154,9 @@ class CompanyResult:
     synthesis: SynthesisResult | None = None
     error: str | None = None
     stop_reason: str | None = None
+    plan: Any = None
+    branches: list = field(default_factory=list)
+    merge: Any = None
 
 
 def _harvest_server_tool_urls(content: Any, recorder: Recorder) -> None:
@@ -198,6 +213,110 @@ def create_run(
         return run.id
 
 
+def read_findings(settings: Settings, company_run_id: int) -> list[dict]:
+    """Every recorded claim with its source, flattened for merging.
+
+    One row per evidence row, so a claim supported by three pages appears three times
+    and the merge step can count its distinct sources.
+    """
+    with session_scope(settings) as s:
+        rows = (
+            s.query(
+                m.Finding.id,
+                m.Finding.field,
+                m.Finding.value,
+                m.Finding.kind,
+                m.Finding.confidence,
+                m.Finding.reason,
+                m.Evidence.source_url,
+                m.Evidence.source_tier,
+                m.Evidence.quote,
+                m.Branch.name,
+            )
+            .select_from(m.Finding)
+            .outerjoin(m.Evidence, m.Evidence.finding_id == m.Finding.id)
+            .outerjoin(m.Branch, m.Branch.id == m.Finding.branch_id)
+            .filter(m.Finding.company_run_id == company_run_id)
+            .all()
+        )
+        return [
+            {
+                "finding_id": r[0],
+                "field": r[1],
+                "value": r[2],
+                "kind": r[3],
+                "confidence": r[4],
+                "reason": r[5],
+                "source_url": r[6],
+                "source_tier": r[7],
+                "quote": r[8],
+                "branch": r[9],
+            }
+            for r in rows
+        ]
+
+
+def read_people(settings: Settings, company_run_id: int) -> list[dict]:
+    with session_scope(settings) as s:
+        rows = (
+            s.query(m.Person)
+            .filter(m.Person.company_run_id == company_run_id)
+            .order_by(m.Person.id)
+            .all()
+        )
+        return [
+            {
+                "name": p.name,
+                "role": p.role,
+                "seniority": p.seniority,
+                "contact": p.contact,
+                "kind": p.kind,
+                "sources": [e.source_url for e in p.evidence],
+            }
+            for p in rows
+        ]
+
+
+def company_stats(settings: Settings, company_run_id: int, merged) -> dict:
+    """Counts for the whole company, across every branch."""
+    with session_scope(settings) as s:
+        findings = (
+            s.query(m.Finding)
+            .filter(m.Finding.company_run_id == company_run_id)
+            .all()
+        )
+        people = (
+            s.query(m.Person)
+            .filter(m.Person.company_run_id == company_run_id)
+            .count()
+        )
+        steps = (
+            s.query(m.Step).filter(m.Step.company_run_id == company_run_id).count()
+        )
+        facts = [f for f in findings if f.kind == m.FindingKind.FACT.value]
+        sourced = [f for f in facts if f.evidence]
+        stats = {
+            "findings": len(findings),
+            "facts": len(facts),
+            "inferences": sum(
+                1 for f in findings if f.kind == m.FindingKind.INFERENCE.value
+            ),
+            "unknowns": sum(
+                1 for f in findings if f.kind == m.FindingKind.UNKNOWN.value
+            ),
+            "people": people,
+            "steps": steps,
+            "evidence_coverage": (len(sourced) / len(facts)) if facts else None,
+        }
+    stats.update(merged.stats())
+    return stats
+
+
+def _branch_summaries(outcomes) -> str | None:
+    parts = [f"{o.name}: {o.summary}" for o in outcomes if o.summary]
+    return "\n".join(parts) if parts else None
+
+
 def research_company(
     *,
     client: Anthropic,
@@ -209,8 +328,13 @@ def research_company(
     requested_fields: list[str] | None = None,
     icp: dict | None = None,
     on_step: Any = None,
+    on_branch: Any = None,
 ) -> CompanyResult:
-    """Research one company end to end and persist everything."""
+    """Research one company end to end and persist everything.
+
+    Plan the branches, run each in its own conversation, merge what they found into
+    assessed claims, then synthesise a profile from the result.
+    """
     company_id = ensure_company(settings, domain, name)
 
     with session_scope(settings) as s:
@@ -228,117 +352,103 @@ def research_company(
     started = time.monotonic()
     usage = Usage()
     synthesis_usage = Usage()
+    planning_usage = Usage()
     result = CompanyResult(
         company_run_id=company_run_id, domain=domain, status=m.Status.RUNNING.value
     )
 
-    try:
-        with _browser_for(settings, shot_dir) as browser:
-            recorder = Recorder(settings=settings, company_run_id=company_run_id)
-            tools = build_tools(
-                session=browser, recorder=recorder, settings=settings
-            )
+    fields = requested_fields or DEFAULT_FIELDS
 
-            brief = build_company_brief(
+    try:
+        # Plan first, so the expensive loops only ever run against a decided question.
+        # At shallow depth this makes no API call and returns a single branch.
+        plan, plan_usage = plan_research(
+            client=client,
+            settings=settings,
+            domain=domain,
+            name=name,
+            objectives=objectives,
+            requested_fields=fields,
+            icp=icp,
+        )
+        planning_usage.add(plan_usage)
+        result.plan = plan
+
+        with _browser_for(settings, shot_dir) as browser:
+            outcomes = run_branches(
+                client=client,
+                settings=settings,
+                browser=browser,
+                company_run_id=company_run_id,
+                plan=plan,
                 domain=domain,
                 name=name,
-                objectives=objectives,
-                requested_fields=requested_fields or DEFAULT_FIELDS,
+                requested_fields=fields,
                 icp=icp,
+                on_step=on_step,
+                on_branch=on_branch,
             )
 
-            runner = client.beta.messages.tool_runner(
-                model=settings.model,
-                max_tokens=MAX_TOKENS_PER_TURN,
-                # Caches the growing conversation tail. Required in addition to the
-                # system breakpoint below: without it every turn re-reads the whole
-                # conversation at the full input rate.
-                cache_control={"type": "ephemeral"},
-                system=[
-                    {
-                        "type": "text",
-                        "text": system_prompt(settings.engine),
-                        "cache_control": {"type": "ephemeral"},
-                    }
+        result.branches = outcomes
+        for outcome in outcomes:
+            usage.merge_into(outcome.usage)
+        if outcomes and all(o.status == m.Status.FAILED.value for o in outcomes):
+            result.error = outcomes[0].error
+
+        # Read back what every branch recorded, then assess it. Corroboration is
+        # counted over the whole company, so it can only happen once the branches
+        # have finished: two branches citing different sources for one fact is
+        # exactly the case that matters.
+        recorded = read_findings(settings, company_run_id)
+        result.merge = merge_findings(recorded)
+        result.stats = company_stats(settings, company_run_id, result.merge)
+
+        if recorded:
+            result.synthesis, synth_usage = synthesize(
+                client=client,
+                settings=settings,
+                findings=[
+                    {k: v for k, v in row.items() if k != "finding_id"}
+                    for row in recorded
                 ],
-                messages=[{"role": "user", "content": brief}],
-                tools=[*tools, *SERVER_TOOLS],
-                thinking={"type": "adaptive"},
-                output_config={
-                    "effort": settings.effort,
-                    "task_budget": {
-                        "type": "tokens",
-                        "total": settings.task_budget_tokens,
-                    },
-                },
-                **context_management_arg(settings),
-                fallbacks="default",
-                betas=BETAS,
-                max_iterations=settings.max_steps + 10,
-                stream=True,
+                people=read_people(settings, company_run_id),
+                objectives=objectives,
+                icp=icp,
+                research_summary=_branch_summaries(outcomes),
+                corroboration=result.merge.stats(),
+                conflicts=[c.describe() for c in result.merge.conflicts],
             )
+            synthesis_usage.add(synth_usage)
 
-            final_message = None
-            for stream in runner:
-                message = stream.get_final_message()
-                final_message = message
-                usage.add(getattr(message, "usage", None))
-                _harvest_server_tool_urls(
-                    getattr(message, "content", None), recorder
-                )
-                if on_step is not None:
-                    on_step(message, recorder)
-                if recorder.finished:
-                    break
-
-            result.stop_reason = getattr(final_message, "stop_reason", None)
-            if result.stop_reason == "refusal":
-                details = getattr(final_message, "stop_details", None)
-                result.error = (
-                    "model declined the request "
-                    f"(category={getattr(details, 'category', None)})"
-                )
-
-            result.stats = recorder.stats()
-
-            # Synthesis sees only what was recorded, never the live pages.
-            findings = recorder.snapshot_of_findings()
-            if findings:
-                result.synthesis, synth_usage = synthesize(
-                    client=client,
-                    settings=settings,
-                    findings=findings,
-                    people=recorder.snapshot_of_people(),
-                    objectives=objectives,
-                    icp=icp,
-                    research_summary=recorder.final_summary,
-                )
-                synthesis_usage.add(synth_usage)
-
-            result.status = (
-                m.Status.DONE.value if result.error is None else m.Status.FAILED.value
-            )
+        result.status = (
+            m.Status.DONE.value if result.error is None else m.Status.FAILED.value
+        )
 
     except Exception as exc:  # noqa: BLE001 - surfaced on the record, not swallowed
         result.status = m.Status.FAILED.value
         result.error = f"{type(exc).__name__}: {exc}"
 
     result.duration_s = time.monotonic() - started
-    total = usage.merge(synthesis_usage)
+
+    # Three billed phases, priced separately so a disappointing run can be attributed:
+    # planning and synthesis may run on a cheaper model than the branches do.
+    total = usage.merge(synthesis_usage).merge(planning_usage)
     result.usage = total.as_dict()
-    result.usage["research_cost_usd"] = estimate_cost_usd(
-        model=settings.model, **usage.billable()
-    )
-    # Priced on its own model, which may differ from the research model.
-    result.usage["synthesis_cost_usd"] = estimate_cost_usd(
-        model=settings.synthesis_model, **synthesis_usage.billable()
-    )
-    research_cost = result.usage["research_cost_usd"]
-    synthesis_cost = result.usage["synthesis_cost_usd"]
+    result.usage["branch_count"] = len(result.branches)
+    costs = {
+        "planning_cost_usd": estimate_cost_usd(
+            model=settings.synthesis_model, **planning_usage.billable()
+        ),
+        "research_cost_usd": estimate_cost_usd(
+            model=settings.model, **usage.billable()
+        ),
+        "synthesis_cost_usd": estimate_cost_usd(
+            model=settings.synthesis_model, **synthesis_usage.billable()
+        ),
+    }
+    result.usage.update(costs)
     result.cost_usd = (
-        None
-        if research_cost is None or synthesis_cost is None
-        else research_cost + synthesis_cost
+        None if any(c is None for c in costs.values()) else sum(costs.values())
     )
 
     _persist_company_run(settings, result)

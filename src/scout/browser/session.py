@@ -61,6 +61,21 @@ _NAV_HINTS = (
 # Truncation is reported to the agent, which can scroll or open a narrower page.
 _SNAPSHOT_CHAR_CAP = 8_000
 
+# The attribute text a snapshot can use as an element's label. Collected separately
+# because innerText does not contain it.
+_JS_ATTRIBUTE_TEXT = """
+() => {
+  const out = [];
+  for (const attr of ['aria-label', 'alt', 'title', 'placeholder']) {
+    for (const el of document.querySelectorAll('[' + attr + ']')) {
+      const v = (el.getAttribute(attr) || '').trim();
+      if (v) out.push(v);
+    }
+  }
+  return out;
+}
+"""
+
 _JS_SNAPSHOT = """
 () => {
   const MAXTEXT = 300;
@@ -321,6 +336,28 @@ class BrowserSession:
             return None
 
     # --------------------------------------------------------------- snapshot
+
+    def full_text(self) -> str:
+        """All visible text on the page, unfiltered, plus accessible-name attributes.
+
+        The snapshot the agent reads is deliberately trimmed, so verification needs
+        the whole page: a quote is a claim about the page rather than about our view
+        of it.
+
+        The attributes matter as much as the body text. A snapshot labels an element
+        from ``aria-label``, ``alt`` or ``title`` when it has no inner text, so the
+        agent can legitimately quote a logo's accessible name -- which appears nowhere
+        in ``innerText``. Leaving them out marked such quotes as fabricated.
+        """
+        try:
+            body = self.page.inner_text("body")
+        except PlaywrightError:
+            return ""
+        try:
+            attrs = self.page.evaluate(_JS_ATTRIBUTE_TEXT)
+        except PlaywrightError:
+            attrs = []
+        return "\n".join([body, *attrs])
 
     def snapshot(self, note: str | None = None) -> PageView:
         """Render the current page as agent-readable text with ``[ref=N]`` handles."""

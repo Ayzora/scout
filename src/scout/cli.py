@@ -11,8 +11,10 @@ from rich.console import Console
 from rich.table import Table
 
 from scout.agent.prompts import FIELD_PRESETS, resolve_fields
-from scout.config import load_settings
-from scout.db.session import init_db
+from dataclasses import replace
+
+from scout.config import VALID_DEPTHS, load_settings
+from scout.db.session import init_db, schema_is_current
 from scout.export import export_run_csv
 
 app = typer.Typer(
@@ -47,6 +49,9 @@ def init() -> None:
     path = init_db(settings)
     console.print(f"[green]Database ready[/green] at {path}")
     console.print(f"Screenshots will be written to {settings.screenshot_dir}")
+    ok, message = schema_is_current(settings)
+    if not ok:
+        console.print(f"\n[yellow]Schema out of date:[/yellow] {message}")
 
 
 @app.command()
@@ -55,6 +60,12 @@ def config() -> None:
     settings = load_settings()
     table = Table(show_header=False, box=None)
     table.add_row("engine", settings.engine)
+    table.add_row(
+        "depth",
+        f"{settings.depth} "
+        f"({settings.depth_profile.max_branches} branches, "
+        f"{settings.depth_profile.max_children} follow-ups)",
+    )
     table.add_row("model", settings.model)
     table.add_row("synthesis model", settings.synthesis_model)
     table.add_row("effort", settings.effort)
@@ -82,6 +93,14 @@ def research(
     objectives: str = typer.Option(
         None, "--objectives", "-o", help="What you want to learn about each company."
     ),
+    depth: str = typer.Option(
+        None,
+        "--depth",
+        help=(
+            "shallow | standard | deep. How many separate branches to research. "
+            "Depth is branches, not a bigger budget for one conversation."
+        ),
+    ),
     fields: str = typer.Option(
         None,
         "--fields",
@@ -99,7 +118,21 @@ def research(
     from scout.agent.loop import create_run, finish_run, research_company
 
     settings = load_settings()
+    if depth is not None:
+        if depth not in VALID_DEPTHS:
+            console.print(
+                f"[red]--depth must be one of {', '.join(VALID_DEPTHS)}.[/red]"
+            )
+            raise typer.Exit(code=2)
+        settings = replace(settings, depth=depth)
     init_db(settings)
+
+    # Checked before anything is spent: a stale schema otherwise surfaces as a missing
+    # column partway through a paid run.
+    ok, message = schema_is_current(settings)
+    if not ok:
+        console.print(f"[bold red]Database schema out of date.[/bold red]\n{message}")
+        raise typer.Exit(code=2)
 
     targets: list[tuple[str, str | None]] = [(d, None) for d in (domain or [])]
     if csv_path is not None:
@@ -121,7 +154,7 @@ def research(
     )
     console.print(
         f"[bold]Run {run_id}[/bold] — {len(targets)} companies, "
-        f"{settings.engine} engine, "
+        f"{settings.engine} engine, {settings.depth} depth, "
         f"model {settings.model} at effort {settings.effort}\n"
     )
 
@@ -137,6 +170,14 @@ def research(
             objectives=objectives,
             requested_fields=requested_fields,
             icp=icp_dict,
+            on_branch=lambda phase, branch, depth: (
+                console.print(
+                    f"    {'  ' * (depth - 1)}[dim]-> {branch.name.value}: "
+                    f"{branch.question[:70]}[/dim]"
+                )
+                if phase == "start"
+                else None
+            ),
         )
         results.append(result)
         if result.error:
@@ -154,12 +195,26 @@ def research(
                     else ""
                 )
             )
+            merged = result.merge
+            if merged is not None:
+                ms = merged.stats()
+                rate = ms.get("corroboration_rate")
+                console.print(
+                    f"  [dim]{ms['corroborated']} corroborated, "
+                    f"{ms['single_sourced']} single-sourced"
+                    + (f", {rate:.0%} of facts" if rate is not None else "")
+                    + "[/dim]"
+                )
+                for conflict in merged.conflicts:
+                    console.print(f"  [yellow]conflict[/yellow] {conflict.describe()}")
+
             usage = result.usage or {}
             research = usage.get("research_cost_usd")
             synth = usage.get("synthesis_cost_usd")
             if research is not None and synth is not None:
                 console.print(
-                    f"  [dim]{usage.get('turns', 0)} turns · "
+                    f"  [dim]{usage.get('branch_count', 0)} branches · "
+                    f"{usage.get('turns', 0)} turns · "
                     f"research ${research:.3f} · synthesis ${synth:.3f} · "
                     f"{usage.get('web_searches', 0)} web searches[/dim]"
                 )
@@ -180,6 +235,98 @@ def export(
     settings = load_settings()
     rows = export_run_csv(settings, run, out)
     console.print(f"[green]Wrote {rows} rows[/green] to {out}")
+
+
+@app.command()
+def verify(
+    run: int = typer.Option(..., "--run", help="Run id to verify."),
+    show_all: bool = typer.Option(
+        False, "--all", help="List every quote, not just the ones that failed."
+    ),
+) -> None:
+    """Check each recorded quote against the page it was taken from.
+
+    Uses no model and costs nothing: it reopens the cited pages in the browser and
+    matches the text. Run it after any research run.
+    """
+    from scout.verify import Verdict, verify_run
+
+    settings = load_settings()
+    console.print(f"Verifying run {run} — reopening each cited page...\n")
+
+    report = verify_run(
+        settings,
+        run,
+        on_page=lambda url, ok: console.print(
+            f"  [{'green' if ok else 'red'}]{'read' if ok else 'failed'}[/] {url}"
+        ),
+    )
+
+    if not report.checks:
+        console.print(
+            f"\n[yellow]No quotes to check in run {run}.[/yellow] "
+            "Either it recorded nothing, or every finding was an explicit unknown."
+        )
+        return
+
+    counts = report.counts()
+    failed = [
+        c
+        for c in report.checks
+        if c.verdict in (Verdict.NOT_FOUND, Verdict.NO_QUOTE)
+    ]
+
+    rows = report.checks if show_all else failed
+    if rows:
+        table = Table("domain", "field", "verdict", "match", "quote", "source")
+        for c in rows:
+            colour = {
+                Verdict.VERBATIM: "green",
+                Verdict.PARAPHRASE: "yellow",
+                Verdict.NOT_FOUND: "red",
+                Verdict.NO_QUOTE: "red",
+                Verdict.UNREACHABLE: "dim",
+            }[c.verdict]
+            table.add_row(
+                c.domain,
+                c.field,
+                f"[{colour}]{c.verdict.value}[/{colour}]",
+                f"{c.ratio:.0%}",
+                (c.quote or "(none)")[:60],
+                (c.source_url or "")[:50],
+            )
+        console.print()
+        console.print(table)
+
+    console.print()
+    console.print(
+        f"verbatim {counts['verbatim']} · paraphrase {counts['paraphrase']} · "
+        f"not found [bold red]{counts['not_found']}[/bold red] · "
+        f"no quote {counts['no_quote']} · unreachable {counts['unreachable']}"
+    )
+    if report.accuracy is not None:
+        colour = (
+            "green"
+            if report.accuracy >= 0.95
+            else "yellow"
+            if report.accuracy >= 0.8
+            else "red"
+        )
+        console.print(
+            f"extraction accuracy: [{colour}]{report.accuracy:.0%}[/{colour}] "
+            f"of checkable quotes found on their cited page"
+        )
+    if counts["unreachable"]:
+        console.print(
+            "[dim]Unreachable pages are not counted either way — a page that will "
+            "not load now is no evidence about the quote.[/dim]"
+        )
+    if counts["not_found"]:
+        console.print(
+            "[dim]A quote can also read as not found when it came from content "
+            "behind a click, which reloading the URL cannot reproduce. Check the "
+            "screenshot for those before treating them as errors.[/dim]"
+        )
 
 
 @app.command()
@@ -221,6 +368,81 @@ def show(
                     p.evidence[0].source_url if p.evidence else "",
                 )
             console.print(people)
+
+    _print_branch_tree(settings, company_run)
+    _print_assessment(settings, company_run)
+
+
+def _print_branch_tree(settings, company_run_id: int) -> None:
+    """How the research was split up, and what each part cost."""
+    from scout.agent.branches import branch_rows
+
+    rows = branch_rows(settings, company_run_id)
+    if not rows:
+        return
+
+    console.print("\n[bold]Branches[/bold]")
+    by_parent: dict = {}
+    for row in rows:
+        by_parent.setdefault(row["parent_branch_id"], []).append(row)
+
+    def render(parent, indent: int) -> None:
+        for row in by_parent.get(parent, []):
+            colour = {"done": "green", "failed": "red", "blocked": "yellow"}.get(
+                row["status"], "white"
+            )
+            cost = f"${row['cost_usd']:.3f}" if row["cost_usd"] is not None else "-"
+            secs = f"{row['duration_s']:.0f}s" if row["duration_s"] else "-"
+            console.print(
+                f"{'  ' * indent}[{colour}]{row['name']}[/{colour}] "
+                f"[dim]{cost} · {secs}[/dim]"
+            )
+            if row["question"]:
+                console.print(f"{'  ' * indent}  [dim]{row['question'][:88]}[/dim]")
+            if row["error"]:
+                console.print(f"{'  ' * indent}  [red]{row['error'][:88]}[/red]")
+            render(row["id"], indent + 1)
+
+    render(None, 1)
+
+
+def _print_assessment(settings, company_run_id: int) -> None:
+    """What is corroborated, what rests on one source, and what disagrees."""
+    from scout.agent.loop import read_findings
+    from scout.agent.merge import merge_findings
+    from scout.agent.sources import tier_name
+
+    rows = read_findings(settings, company_run_id)
+    if not rows:
+        return
+    merged = merge_findings(rows)
+    stats = merged.stats()
+
+    console.print("\n[bold]Assessment[/bold]")
+    rate = stats.get("corroboration_rate")
+    console.print(
+        f"  {stats['corroborated']} corroborated · "
+        f"{stats['single_sourced']} single-sourced"
+        + (f" · {rate:.0%} of facts corroborated" if rate is not None else "")
+    )
+
+    if merged.conflicts:
+        console.print("\n[bold yellow]Sources disagree[/bold yellow]")
+        for conflict in merged.conflicts:
+            console.print(f"  {conflict.describe()}")
+
+    best = [c for c in merged.corroborated][:8]
+    if best:
+        table = Table("field", "value", "sources", "strongest")
+        for claim in best:
+            table.add_row(
+                claim.field,
+                str(claim.value)[:50],
+                str(claim.source_count),
+                tier_name(claim.best_tier),
+            )
+        console.print("\n[bold]Best-supported claims[/bold]")
+        console.print(table)
 
 
 def _read_csv(path: Path) -> list[tuple[str, str | None]]:

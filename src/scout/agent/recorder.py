@@ -16,6 +16,9 @@ from dataclasses import dataclass, field
 from datetime import timezone
 from urllib.parse import urlparse
 
+from sqlalchemy import func
+
+from scout.agent.sources import source_tier
 from scout.config import Settings
 from scout.db import models as m
 from scout.db.session import session_scope
@@ -34,6 +37,11 @@ class PageContext:
 class Recorder:
     settings: Settings
     company_run_id: int
+    # Which branch is recording. None for a run that is one flat conversation.
+    branch_id: int | None = None
+    # The company's own domain, so a URL on it can be recognised as the company
+    # speaking about itself rather than a third party reporting on it.
+    company_domain: str | None = None
 
     page: PageContext = field(default_factory=PageContext)
     visited_urls: set[str] = field(default_factory=set)
@@ -42,8 +50,32 @@ class Recorder:
     unsourced_claims: int = 0
     finished: bool = False
     final_summary: str | None = None
+    # Organisations a branch thinks are worth their own branch. Named by the agent,
+    # capped and run by the orchestrator, so depth never escapes into the prompt.
+    followups: list[dict] = field(default_factory=list)
 
     # ------------------------------------------------------------------ trace
+
+    def _next_seq(self) -> int:
+        """The next step number for this company run.
+
+        ``seq`` is unique per company run but each branch has its own Recorder, so a
+        counter starting from zero in each one collides as soon as a second branch
+        takes a step. Seeded from the database the first time, then kept in memory.
+
+        This is the first thing branching broke, and it broke quietly: the agent kept
+        working and recorded what it could through other tools, so the run looked
+        successful while losing findings.
+        """
+        if self._seq == 0:
+            with session_scope(self.settings) as s:
+                highest = (
+                    s.query(func.max(m.Step.seq))
+                    .filter(m.Step.company_run_id == self.company_run_id)
+                    .scalar()
+                )
+            self._seq = highest or 0
+        return self._seq + 1
 
     def log_step(
         self,
@@ -56,11 +88,12 @@ class Recorder:
         screenshot_path: str | None = None,
         duration_ms: int | None = None,
     ) -> int:
-        self._seq += 1
+        self._seq = self._next_seq()
         with session_scope(self.settings) as s:
             s.add(
                 m.Step(
                     company_run_id=self.company_run_id,
+                    branch_id=self.branch_id,
                     seq=self._seq,
                     type=step_type,
                     tool_name=tool_name,
@@ -133,6 +166,7 @@ class Recorder:
         with session_scope(self.settings) as s:
             finding = m.Finding(
                 company_run_id=self.company_run_id,
+                branch_id=self.branch_id,
                 field=field_name,
                 value=value,
                 kind=kind,
@@ -145,6 +179,7 @@ class Recorder:
                 m.Evidence(
                     finding_id=finding.id,
                     source_url=evidence_url,
+                    source_tier=source_tier(evidence_url, self.company_domain),
                     page_title=self.page.title or None,
                     quote=evidence_quote,
                     screenshot_path=self._screenshot_for(evidence_url),
@@ -179,6 +214,7 @@ class Recorder:
         with session_scope(self.settings) as s:
             person = m.Person(
                 company_run_id=self.company_run_id,
+                branch_id=self.branch_id,
                 name=name,
                 role=role,
                 seniority=seniority,
@@ -190,6 +226,7 @@ class Recorder:
                 m.Evidence(
                     person_id=person.id,
                     source_url=evidence_url,
+                    source_tier=source_tier(evidence_url, self.company_domain),
                     page_title=self.page.title or None,
                     quote=evidence_quote,
                     screenshot_path=self._screenshot_for(evidence_url),
@@ -245,6 +282,17 @@ class Recorder:
                 }
                 for p in people
             ]
+
+    def note_followup(self, *, entity: str, kind: str, reason: str) -> None:
+        """Record an organisation worth researching separately.
+
+        Only organisations. Following up on a named individual would mean building a
+        profile of a person beyond what their employer published, which is the thing
+        the data-protection rules exist to prevent.
+        """
+        self.followups.append(
+            {"entity": entity.strip(), "kind": kind, "reason": reason.strip()}
+        )
 
     def stats(self) -> dict:
         with session_scope(self.settings) as s:
