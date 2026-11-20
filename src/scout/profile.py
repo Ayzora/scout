@@ -95,6 +95,18 @@ COLUMNS: tuple[Column, ...] = (
         aliases=("hq_country", "home_country", "jurisdiction"),
     ),
     Column(
+        "contact_email",
+        "A contact address the company publishes. Never guessed from a pattern.",
+        aliases=("email", "contact_emails", "enquiries_email", "general_email"),
+        patterns=(r"\bemails?\b",),
+    ),
+    Column(
+        "contact_phone",
+        "A phone number the company publishes.",
+        aliases=("phone", "telephone", "contact_number", "switchboard"),
+        patterns=(r"phone", r"telephone"),
+    ),
+    Column(
         "industry",
         "Primary industry or sector.",
         aliases=("sector", "vertical", "industry_classification", "sic", "industry_classification_code"),
