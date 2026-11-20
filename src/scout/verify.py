@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from enum import Enum
 
+from scout.browser.fetcher import http_get
 from scout.browser.session import BrowserSession
 from scout.config import Settings
 from scout.db import models as m
@@ -184,6 +185,7 @@ class VerifyReport:
     checks: list[QuoteCheck]
     pages_loaded: int
     pages_unreachable: int
+    pages_fetched: int = 0
 
     def counts(self) -> dict[str, int]:
         out = {v.value: 0 for v in Verdict}
@@ -238,6 +240,34 @@ def _evidence_rows(settings: Settings, run_id: int) -> list[tuple]:
         return [tuple(r) for r in rows]
 
 
+def _best(quote: str | None, texts: list[str | None]) -> tuple[Verdict, float]:
+    """The kindest verdict any faithful rendering of the page supports.
+
+    A page has more than one honest text. The agent now reads most pages over plain
+    HTTP and the browser renders others, and the two differ: markup that becomes
+    visible text in one is dropped by the other, and element boundaries fall in
+    different places. Checking a quote against only one of them marks correct claims
+    as fabricated -- measured at 77% on a run whose contact details were, on
+    inspection, exactly right.
+
+    Taking the best cannot launder an invention. Both texts are the real page, so a
+    sentence absent from both is still absent.
+    """
+    best: tuple[Verdict, float] | None = None
+    for text in texts:
+        verdict, ratio = classify(quote, text)
+        if verdict in (Verdict.NO_QUOTE, Verdict.UNREACHABLE):
+            best = best or (verdict, ratio)
+            continue
+        if best is None or ratio > best[1] or best[0] in (
+            Verdict.NO_QUOTE, Verdict.UNREACHABLE
+        ):
+            best = (verdict, ratio)
+        if verdict is Verdict.VERBATIM:
+            break
+    return best or (Verdict.UNREACHABLE, 0.0)
+
+
 def verify_run(
     settings: Settings,
     run_id: int,
@@ -247,7 +277,12 @@ def verify_run(
 ) -> VerifyReport:
     """Re-read every cited page in a run and check the quotes against it.
 
-    Each distinct URL is loaded once, however many claims cite it.
+    Each page is fetched over plain HTTP first, which is how most of them were read in
+    the first place and costs a fraction of a browser load. The browser is used only
+    for the pages where something did not match -- a JavaScript page, or a quote whose
+    wording depends on how the text was extracted. That is the same escalation rule
+    the research engine follows, and holding verification to a different one is what
+    produced the mismatch this exists to remove.
     """
     rows = _evidence_rows(settings, run_id)
     by_url: dict[str, list[tuple]] = {}
@@ -255,25 +290,61 @@ def verify_run(
         by_url.setdefault(row[4], []).append(row)
 
     checks: list[QuoteCheck] = []
-    loaded = unreachable = 0
+    fetched = loaded = unreachable = 0
 
-    def run_with(browser: BrowserSession) -> None:
-        nonlocal loaded, unreachable
+    def browser_text(browser: BrowserSession | None, url: str) -> str | None:
+        nonlocal loaded
+        if browser is None:
+            return None
+        result = browser.goto(url)
+        if result.view.blocked or result.view.text.startswith(
+            ("Navigation failed", "Navigation refused")
+        ):
+            return None
+        loaded += 1
+        return browser.full_text()
+
+    def run_with(browser: BrowserSession | None) -> None:
+        nonlocal fetched, unreachable
         for url, group in by_url.items():
-            page_text: str | None = None
+            texts: list[str | None] = []
             if url:
-                result = browser.goto(url)
-                if result.view.blocked or result.view.text.startswith(
-                    ("Navigation failed", "Navigation refused")
-                ):
-                    unreachable += 1
-                else:
-                    page_text = browser.full_text()
-                    loaded += 1
+                direct = http_get(url, timeout=settings.page_timeout_ms / 1000)
+                if direct.ok and direct.text:
+                    texts.append(direct.text)
+                    fetched += 1
+
+            pending = list(group)
+            results: dict[int, tuple[Verdict, float]] = {}
+            for index, row in enumerate(pending):
+                results[index] = _best(row[5], texts) if texts else (
+                    Verdict.UNREACHABLE, 0.0
+                )
+
+            # Only the quotes the fetched text could not account for are worth a
+            # browser load, and one load settles all of them.
+            if url and any(
+                v[0] not in (Verdict.VERBATIM, Verdict.PARAPHRASE, Verdict.NO_QUOTE)
+                for v in results.values()
+            ):
+                rendered = browser_text(browser, url)
+                if rendered is not None:
+                    texts.append(rendered)
+                    for index, row in enumerate(pending):
+                        if results[index][0] in (Verdict.VERBATIM, Verdict.NO_QUOTE):
+                            continue
+                        results[index] = _best(row[5], texts)
+
+            reachable = bool(texts)
+            if not reachable and url:
+                unreachable += 1
             if on_page is not None:
-                on_page(url, page_text is not None)
-            for cr_id, domain, field, kind, source_url, quote in group:
-                verdict, ratio = classify(quote, page_text)
+                on_page(url, reachable)
+
+            for index, (cr_id, domain, field, kind, source_url, quote) in enumerate(
+                pending
+            ):
+                verdict, ratio = results[index]
                 checks.append(
                     QuoteCheck(
                         company_run_id=cr_id,
@@ -290,6 +361,7 @@ def verify_run(
     if session is not None:
         run_with(session)
     else:
+        # Opened lazily: a run whose pages all answer over HTTP never launches one.
         with BrowserSession(
             screenshot_dir=settings.screenshot_dir,
             headed=False,
@@ -301,5 +373,8 @@ def verify_run(
             run_with(browser)
 
     return VerifyReport(
-        checks=checks, pages_loaded=loaded, pages_unreachable=unreachable
+        checks=checks,
+        pages_loaded=loaded,
+        pages_unreachable=unreachable,
+        pages_fetched=fetched,
     )

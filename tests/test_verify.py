@@ -258,3 +258,62 @@ def test_accuracy_is_none_when_nothing_could_be_checked(tmp_path):
     report = verify_run(settings, run_id)
     assert report.checks == []
     assert report.accuracy is None
+
+
+# ------------------------------------------------- one page, two honest renderings
+
+
+def test_the_kindest_honest_rendering_decides():
+    """The agent reads most pages over HTTP; the browser renders the rest. Markup
+    that becomes visible text in one is dropped by the other, so a correct quote can
+    fail against the wrong one. Measured at 77% on a run whose facts were right."""
+    from scout.verify import _best
+
+    http_text = "Contact Us . Give us a call on 03450 678080 or email info@acme.co.uk"
+    rendered = "Give us a call on 03450 678080"
+    verdict, _ = _best("Contact Us . Give us a call on 03450 678080", [rendered, http_text])
+    assert verdict is Verdict.VERBATIM
+
+
+def test_taking_the_best_cannot_rescue_an_invention():
+    """Both texts are the real page, so a sentence in neither is still absent.
+    Without this the metric would wave through exactly what it exists to catch."""
+    from scout.verify import _best
+
+    verdict, ratio = _best(
+        "We employ 9,000 people and are headquartered in Zurich",
+        ["Acme Ltd is based in Salford.", "Acme Ltd . Based in Salford, England."],
+    )
+    assert verdict is Verdict.NOT_FOUND
+    assert ratio < PARAPHRASE_RATIO
+
+
+def test_a_page_reachable_by_neither_route_is_unreachable_not_wrong():
+    from scout.verify import _best
+
+    assert _best("anything", [None, None])[0] is Verdict.UNREACHABLE
+    assert _best("anything", [])[0] is Verdict.UNREACHABLE
+
+
+def test_a_missing_quote_stays_a_missing_quote():
+    from scout.verify import _best
+
+    assert _best(None, ["a page"])[0] is Verdict.NO_QUOTE
+
+
+def test_fetching_settles_most_pages_without_a_browser(run_with_evidence):
+    """The browser is for the pages plain HTTP could not account for. Loading one for
+    every page would cost more than the research run did."""
+    settings, run_id = run_with_evidence
+    report = verify_run(settings, run_id)
+    assert report.pages_fetched >= 1
+    # The fixture page is JavaScript-rendered, so this one does need the browser.
+    assert report.pages_loaded >= 1
+
+
+def test_the_planted_fabrication_still_fails_through_both_routes(run_with_evidence):
+    settings, run_id = run_with_evidence
+    report = verify_run(settings, run_id)
+    by_field = {c.field: c for c in report.checks}
+    assert by_field["company_size"].verdict is Verdict.NOT_FOUND
+    assert by_field["headquarters_location"].verdict is Verdict.VERBATIM
