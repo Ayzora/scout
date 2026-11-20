@@ -101,3 +101,38 @@ def test_the_cli_exposes_the_commands_the_readme_promises():
     names = {c.name or c.callback.__name__ for c in app.registered_commands}
     assert {"init", "doctor", "config", "research", "serve", "export", "verify",
             "show"} <= names
+
+
+# ------------------------------------------------------------------- the README
+
+
+@pytest.fixture(scope="module")
+def readme() -> str:
+    return (ROOT / "README.md").read_text()
+
+
+def test_the_readme_only_promises_commands_that_exist(readme):
+    import re
+
+    from scout.cli import app
+
+    names = {c.name or c.callback.__name__ for c in app.registered_commands}
+    promised = set(re.findall(r"scout ([a-z][a-z-]+)", readme)) - {"doctor"}
+    unknown = {p for p in promised if p not in names}
+    assert not unknown, f"the README promises commands that do not exist: {unknown}"
+
+
+def test_the_readme_lists_the_real_columns(readme):
+    """The column list is the product. It cannot drift from the schema."""
+    from scout.profile import BY_NAME
+
+    for name in BY_NAME:
+        assert f"`{name}`" in readme, f"{name} is missing from the README"
+
+
+def test_the_readme_documents_every_setting_that_changes_behaviour(readme):
+    for setting in (
+        "ANTHROPIC_API_KEY", "SCOUT_MODEL", "SCOUT_DEPTH", "SCOUT_ENGINE",
+        "SCOUT_RESPECT_ROBOTS", "SCOUT_TASK_BUDGET_TOKENS",
+    ):
+        assert setting in readme
