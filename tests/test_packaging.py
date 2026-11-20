@@ -136,3 +136,27 @@ def test_the_readme_documents_every_setting_that_changes_behaviour(readme):
         "SCOUT_RESPECT_ROBOTS", "SCOUT_TASK_BUDGET_TOKENS",
     ):
         assert setting in readme
+
+
+def test_every_colour_token_is_a_valid_hex_value():
+    """A Cyrillic 'e' inside #dce1e2 parses as nothing and the rule is dropped
+    silently, which is how a theme loses a third of its hairlines without anyone
+    noticing. Caught once; pinned here."""
+    import re
+
+    from scout.api.app import STATIC_DIR
+
+    css = (STATIC_DIR / "assets" / "app.css").read_text()
+    for name, value in re.findall(r"(--[a-z-]+):\s*([^;]+);", css):
+        value = value.strip()
+        if not value.startswith("#"):
+            continue
+        assert re.fullmatch(r"#[0-9a-fA-F]{3,8}", value), f"{name} is {value!r}"
+
+
+def test_the_stylesheet_has_no_characters_that_only_look_like_ascii():
+    from scout.api.app import STATIC_DIR
+
+    for line in (STATIC_DIR / "assets" / "app.css").read_text().split("\n"):
+        suspect = [c for c in line if 0x0400 <= ord(c) <= 0x04FF]
+        assert not suspect, f"Cyrillic look-alike in: {line.strip()}"

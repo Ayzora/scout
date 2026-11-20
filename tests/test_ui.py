@@ -56,7 +56,9 @@ def server(tmp_path_factory):
         for field, value, url in (
             ("legal_name", '"SMIDSY LTD."',
              "https://find-and-update.company-information.service.gov.uk/company/1"),
-            ("trading_name", '"Beryl"', "https://beryl.cc/"),
+            # Recorded the way a real run records it, caveat and all.
+            ("trading_name", '"Beryl (site header reads BERYL.CC)"',
+             "https://beryl.cc/"),
             ("contact_email", '"hello@beryl.cc"', "https://beryl.cc/contact"),
             ("board_page_date", '"reviewed 2026"', "https://beryl.cc/about"),
         ):
@@ -235,3 +237,13 @@ def test_it_reads_on_a_phone(page):
         assert "SMIDSY LTD." in page.inner_text("#view")
     finally:
         page.set_viewport_size({"width": 1280, "height": 900})
+
+
+def test_a_caveat_in_the_name_does_not_become_the_heading(page):
+    """A recorded value often carries a parenthetical note. It belongs in the row,
+    not in the heading, where it pushes the name off the line."""
+    _, cr_id = page.ids
+    _visit(page, f"/companies/{cr_id}")
+    assert page.inner_text("h1").strip() == "Beryl"
+    # The full value, caveat included, is still shown where it belongs.
+    assert "site header reads BERYL.CC" in page.inner_text("#panel")

@@ -157,14 +157,14 @@ function paintRun(run) {
       <div class="domain">#${run.id} · ${esc(run.model)} · ${esc(run.engine)} engine</div>
     </div>
     ${run.objectives ? `<p class="lede">${esc(run.objectives)}</p>` : ''}
-    <div class="stats">
-      <div><div class="stat-label">Companies</div>
-        <div class="stat-value">${done.length}<small> / ${run.companies.length}</small></div></div>
-      <div><div class="stat-label">Spent</div><div class="stat-value">${money(spend)}</div></div>
-      <div><div class="stat-label">Per company</div>
-        <div class="stat-value">${done.length ? money(spend / done.length) : '—'}</div></div>
-      <div><div class="stat-label">Status</div><div class="stat-value">${statusMark(run.status)}</div></div>
-    </div>
+    <dl class="stats stats-row">
+      <div><dt>Companies</dt>
+        <dd>${done.length}<small> / ${run.companies.length}</small></dd></div>
+      <div><dt>Spent</dt><dd>${money(spend)}</dd></div>
+      <div><dt>Per company</dt>
+        <dd>${done.length ? money(spend / done.length) : '—'}</dd></div>
+      <div><dt>Status</dt><dd>${statusMark(run.status)}</dd></div>
+    </dl>
     ${run.icp ? `<h2 class="section">Ideal customer</h2>
       <table><tbody>${Object.entries(run.icp).map(([k, v]) =>
         `<tr><td style="width:12rem">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}
@@ -202,7 +202,12 @@ async function companyView(id) {
   const named = (field) => c.profile.find((f) => f.field === field && f.filled)?.value;
   // A domain is how you reached the company, not what it is called. Beryl's entity
   // is SMIDSY Ltd; showing beryl.cc as the title hides the more useful fact.
-  const title = named('trading_name') || named('legal_name') || c.name || c.domain;
+  // The recorded value often carries a caveat -- "AsiaGate (site header reads
+  // 'ASIA GATE')" -- which belongs in the profile row, not in the heading.
+  const headline = (v) => clip(String(v).replace(/\s*[(\[].*$/, '').trim(), 48);
+  const title = headline(
+    named('trading_name') || named('legal_name') || c.name || c.domain,
+  ) || c.domain;
   view.innerHTML = `
     <div class="breadcrumb">
       <a href="#/">Runs</a> / <a href="#/runs/${c.run_id}">Run ${c.run_id}</a> /
@@ -215,14 +220,19 @@ async function companyView(id) {
       </div>
     </div>
     ${c.error ? `<div class="notice bad">${esc(c.error)}</div>` : ''}
-    ${c.summary ? `<p class="lede">${esc(c.summary)}</p>` : ''}
-    <div class="stats">
-      <div><div class="stat-label">Core coverage</div><div class="stat-value">${pct(c.coverage)}</div></div>
-      <div><div class="stat-label">Corroborated</div>
-        <div class="stat-value">${c.assessment.corroborated}<small> of ${c.assessment.claims}</small></div></div>
-      <div><div class="stat-label">People</div><div class="stat-value">${c.people.length}</div></div>
-      <div><div class="stat-label">Time</div><div class="stat-value">${secs(c.duration_s)}</div></div>
-      <div><div class="stat-label">Cost</div><div class="stat-value">${money(c.cost_usd)}</div></div>
+    <div class="dossier-head">
+      <div class="dossier-summary">
+        ${c.summary ? `<p class="lede">${esc(c.summary)}</p>`
+          : '<p class="empty">No summary was written for this company.</p>'}
+      </div>
+      <dl class="stats">
+        <div><dt>Core coverage</dt><dd>${pct(c.coverage)}</dd></div>
+        <div><dt>Corroborated</dt>
+          <dd>${c.assessment.corroborated}<small> of ${c.assessment.claims}</small></dd></div>
+        <div><dt>People</dt><dd>${c.people.length}</dd></div>
+        <div><dt>Time</dt><dd>${secs(c.duration_s)}</dd></div>
+        <div><dt>Cost</dt><dd>${money(c.cost_usd)}</dd></div>
+      </dl>
     </div>
     <div class="tabs" id="tabs" role="tablist">
       <button role="tab" data-tab="profile">Profile</button>
@@ -281,9 +291,9 @@ function profilePanel(c) {
     </div>
     <p style="max-width:var(--measure);font-size:0.9rem">${esc(q.rationale || '')}</p>
     <div class="criteria">
-      ${q.matched?.length ? `<div><div class="stat-label">Matched</div>
+      ${q.matched?.length ? `<div><div class="minor-label">Matched</div>
         <ul>${q.matched.map((m) => `<li>${esc(m)}</li>`).join('')}</ul></div>` : ''}
-      ${q.missed?.length ? `<div><div class="stat-label">Missed</div>
+      ${q.missed?.length ? `<div><div class="minor-label">Missed</div>
         <ul>${q.missed.map((m) => `<li>${esc(m)}</li>`).join('')}</ul></div>` : ''}
     </div>` : `
     <h2 class="section">Fit against the ideal customer</h2>
