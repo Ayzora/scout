@@ -1,200 +1,222 @@
 # Scout
 
-Autonomous web research and lead enrichment agent. Scout drives a **real browser** to
-investigate companies, gathers evidence-backed business intelligence, and turns a list of
-company names or domains into structured profiles.
+Give Scout a list of company domains. It researches each one, records every claim with
+the page and the sentence it came from, and gives you back one row per company.
 
-Local-first: the browser, the agent and the database all run on your own machine, with
-your own Anthropic API key. No account to create, no hosted service, no cloud database.
+Everything runs on your machine: the browser, the agent, the database. You bring an
+Anthropic API key. There is no account and no hosted service.
 
-> **Status: works from the command line.** Research runs as a tree of branches, every
-> quote can be checked against its source page, and one company measured **$0.087 for 69
-> findings**. The dashboard, batch concurrency and the evaluation harness are not built
-> yet — see [Roadmap](#roadmap).
+A company costs about **4p and takes about two minutes**.
 
-## Why a browser
+```
+legal_name             SMIDSY LTD.
+trading_name           Beryl
+registration_number    07831245            ◆ corroborated
+legal_status           Private limited company (active)
+headquarters_location  Unit 4.14, The Frames, 1 Phipp St, London EC2A 4PS
+industry               SIC 32300 — Manufacture of sports goods
+founded                Incorporated 1 November 2011
+contact_email          hello@beryl.cc
+people                 4 directors, from the officer register
+```
 
-Conventional scrapers fetch HTML and apply selectors. That breaks on most modern company
-sites, because the content is not in the HTML: it arrives later, from an API call, and some
-of it has no URL at all — a team list behind a "meet the team" button, a spec table behind
-a tab.
+Beryl trades as Beryl. The company is SMIDSY Ltd. You would not learn that from the
+domain, and most databases get it wrong.
 
-Scout runs Playwright, so it reads the page *after* JavaScript has run, and it can click,
-type and scroll like a person. The test suite demonstrates exactly this: `tests/` serves a
-fixture site whose company facts are absent from the served markup, asserts that a plain
-HTTP fetch cannot see them, and then asserts that Scout can.
+## What makes it different from asking a chatbot
+
+For one company, nothing — ask Claude, it is faster. The difference shows up in four
+places.
+
+**It scales.** 500 companies is one CSV with the same columns in every row, about £12
+and a night of wall-clock. Five hundred chat conversations is not a dataset.
+
+**The quotes are checked by a machine.** Every claim stores the sentence it came from.
+`scout verify` reopens each page and checks the sentence is still there. No model is
+involved, so it is free and repeatable. Measured on three companies: 100%, 98%, 94%.
+
+**It says what it could not find.** One run recorded twelve explicit unknowns, each with
+a reason — "the site states 'a combined 100+ years of experience' but gives no
+headcount". It does not turn that into an estimate.
+
+**It is a database, not a transcript.** Re-verify a claim from three months ago. Diff
+two runs on the same company. Export to a CRM. Close the tab and it is still there.
 
 ## Install
 
 ```bash
+git clone https://github.com/Ayzora/scout.git
+cd scout
 ./scripts/install.sh
 ```
 
-That checks for [uv](https://docs.astral.sh/uv/), installs dependencies against a pinned
-Python 3.12+, installs Chromium for Playwright, writes `.env`, and creates the database.
-Then put your key in `.env`:
+The script installs [uv](https://docs.astral.sh/uv/) if you do not have it, uses it to
+fetch Python 3.12 (macOS still ships 3.9, which is too old), installs the packages and
+one Chromium, writes `.env`, and creates the database. Run it twice and it will not
+overwrite anything.
+
+Put your key in `.env`:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Check it took:
+Then check the install:
 
 ```bash
-uv run scout config
+uv run scout doctor
 ```
 
-## Use
+It tells you what is missing and what to type.
+
+## Use it
+
+### The dashboard
 
 ```bash
-# One company
-uv run scout research --domain monzo.com \
-  --objectives "What do they sell, and who leads the company?"
-
-# A batch from CSV (needs a 'domain' column; 'name' optional)
-uv run scout research --csv examples/companies.csv
-
-# Qualify against an ideal customer profile
-uv run scout research --csv examples/companies.csv \
-  --icp '{"size":"200-5000 employees","region":"UK or EU"}'
-
-# Choose how deep to go: shallow | standard | deep
-uv run scout research --domain monzo.com --depth deep \
-  --objectives "What do they sell, and who leads the company?"
-
-# Inspect one company: findings, sources, the branch tree, what is corroborated
-uv run scout show --company-run 1
-
-# Check every recorded quote against the page it came from (free, no model)
-uv run scout verify --run 1
-
-# Export
-uv run scout export --run 1 -o results.csv
+uv run scout serve
 ```
 
-More in [examples/README.md](examples/README.md).
+Open http://127.0.0.1:8000. Start a run, watch it, read the results: the profile with a
+source beside every value, the fit against what you are looking for, the people, every
+claim with its quote, and a trace of what the agent did.
+
+### The command line
+
+```bash
+uv run scout research -d beryl.cc \
+  --objectives "who runs it, how big, what it sells, what changed recently" \
+  --icp '{"sector": "UK mobility", "size": "50+ staff", "buying_signal": "recent funding"}'
+```
+
+Several companies at once:
+
+```bash
+uv run scout research --csv leads.csv --objectives "..." --label "november"
+```
+
+`leads.csv` needs a `domain` column. A `name` column is optional.
+
+Then, free — neither command calls the API:
+
+```bash
+uv run scout verify --run 7              # check every quote against its page
+uv run scout show --company-run 7        # the profile, with sources
+uv run scout export --run 7 --out out.csv
+```
+
+### Give it a goal
+
+Scout refuses to run without `--objectives` or `--icp`. This is deliberate. With no
+goal the planner has no reason to prefer one fact over another, and an early run came
+back with thirteen overlapping service descriptions and nobody who worked there.
+
+`--icp` is a JSON description of who you want. Each company is scored 0–100 against it,
+with the criteria it matched and missed. Without one you get a description instead of a
+verdict.
+
+`--exploratory` skips the check if you really want an aimless run.
+
+## What you get
+
+Twenty-one fixed columns, the same for every company:
+
+`legal_name` · `trading_name` · `website` · `registration_number` · `legal_status` ·
+`regulator` · `headquarters_location` · `country` · `contact_email` · `contact_phone` ·
+`industry` · `business_activities` · `products_services` · `employee_count` · `revenue` ·
+`founded` · `ownership` · `geographic_presence` · `target_markets` ·
+`technology_signals` · `recent_developments`
+
+Each one exports with a second column saying which hosts it came from. A claim backed by
+two independent sources, one of them a register or the company itself, is marked
+corroborated. Anything that fits no column is kept in `extras_json` rather than dropped,
+so a gap in the vocabulary is visible in the output.
+
+People are separate, with their role and the page that published them.
 
 ## How it works
 
-```
-scout research
-      │
-      ├─ plan        one structured call, no tools: which branches to research
-      │
-      ├─ branches    each its own short conversation, own budget, own question
-      │                identity · products · people · financials · market · signals
-      │                  │
-      │                  ├─ Playwright Chromium (headed by default, so you can watch)
-      │                  └─ Claude (your key) + web_search / web_fetch
-      │
-      ├─ merge       pure Python: group equal claims, weigh sources, find conflicts
-      │
-      └─ synthesize  a profile from the recorded findings only
-```
+**A plan, then branches.** One cheap structured call picks three or four areas worth
+researching. Each becomes its own short conversation with its own budget. This is not
+tidiness — a single conversation re-reads its whole history every turn, so ten times the
+depth costs forty times as much. Split across branches it costs ten.
 
-**Research is a tree, not one long conversation.** A single conversation re-reads its own
-history every turn, so its cost grows with the *square* of its length: ten times the depth
-costs forty times as much. Split across branches it grows linearly. That is the whole
-reason depth is affordable — `--depth deep` costs less than a shallow pass did on a larger
-model. Branches run one after another; running them at the same time would save time, not
-money.
+**Registers first.** Legal identity comes from Companies House or the NHS organisation
+directory through a direct lookup: free, exact, and stronger than anything a web search
+returns. Searching is the one thing billed per request rather than per token, and on an
+early run ten searches were 82% of the bill while all the browsing and reasoning came to
+two pence.
 
-**Pages are read as a rendered snapshot**: text, with a stable `[ref=N]` handle on every
-interactive element. The agent can only click a ref the snapshot actually showed it, which
-beats CSS selectors because refs survive re-renders. Screenshots are written to disk on
-every step for inspection, but only sent to the model when the agent asks — vision is for
-when layout or imagery carries the information, such as partner logos or an infographic.
+**Pages are fetched, then escalated.** Plain HTTP first. If what comes back is a bot
+challenge, an error, or a shell that only renders in a browser, the page is reopened in
+Chromium automatically. The page decides, not a rule about the host — and the split is
+not where you would guess. Registries, regulators and job boards serve clean HTML.
+Company marketing sites are the JavaScript shells. Monzo's homepage is 479 characters of
+text inside 239KB of markup.
 
-**Findings are recorded the moment they are observed**, while the page is still open, each
-with its source URL and a supporting quote. This is the central design decision. A model
-asked to produce its sources *after* the fact reconstructs them from memory and invents
-plausible URLs; recording at the point of observation ties every claim to a page that was
-genuinely loaded. Scout also checks each claimed source against the pages the session
-actually opened, and flags any that it never visited.
+**Claims are recorded as they are seen**, with the URL and quote, while the page is
+still open. A model asked to produce its sources afterwards invents plausible ones.
 
-**Every claim is labelled** as an observed fact, an inference, or an explicit unknown — in
-the database schema, not merely in the prompt. A gap is recorded as an unknown with a
-reason rather than left silently absent, so completeness figures mean something.
+**Then they are merged.** Equal claims group, extra evidence attaches, single-sourced
+claims are flagged, and two sources that genuinely disagree are both recorded. That step
+is plain Python with no model in it, so the corroboration count is a fact about the
+evidence rather than a judgement.
 
-**Sources are weighed by where they come from**, not by assertion: a statutory register
-above the company's own site, above the press, above anything openly editable. A claim
-counts as corroborated only with two *different* hosts and at least one primary among
-them — so two aggregators copying the same original do not confirm each other, and three
-pages of one site are one source. A single-sourced claim is flagged, never discarded.
+## Configuration
 
-**Disagreements are surfaced** rather than resolved silently. If two sources give
-different headquarters, both are recorded and the conflict is reported.
+Everything lives in `.env`. `uv run scout config` prints what is in effect.
 
-**Synthesis is a second pass** that sees only the recorded findings, never the live pages,
-so it cannot introduce a claim that no page supported.
+| | |
+|---|---|
+| `ANTHROPIC_API_KEY` | Required. Nothing that costs money runs without it. |
+| `SCOUT_MODEL` | `claude-haiku-5-5`. Opus cost 34× more for identical measured work. |
+| `SCOUT_DEPTH` | `shallow` (1 branch), `standard` (4), `deep` (6 plus follow-ups). |
+| `SCOUT_ENGINE` | `browser`, `fetch`, or `browser_toolset`. |
+| `SCOUT_TASK_BUDGET_TOKENS` | Per branch, not per run. Default 40,000. |
+| `SCOUT_HEADED` | Show the browser window when one is actually needed. |
+| `SCOUT_RESPECT_ROBOTS` | On by default. |
+| `COMPANIES_HOUSE_API_KEY` | Optional and free. Without it Scout hands the agent the public search page instead of guessing a company number. |
 
-**And the quotes can be checked.** `scout verify` reopens every cited page and matches the
-stored quote against the rendered text. It uses no model, so it costs nothing and can run
-after every research run. On a real run: 45 verbatim, 2 paraphrased, 0 fabricated.
+## Limits
 
-## The output is one row, with fixed columns
-
-Every company exports the same columns — `legal_name`, `registration_number`,
-`employee_count`, `revenue` and the rest — whatever the agent happened to call a field
-while researching. Each column carries a second column saying which hosts it came from,
-and a tick where two independent sources agree. Findings that fit no column are kept in
-`extras_json` rather than dropped, so a gap in the vocabulary is visible in the output.
-
-That matters more than it sounds. Before this, three runs on one company recorded the
-same fact as `identifier_ods_code`, `registration_number (Companies House)` and
-`total_headcount_2025_26_narrative`. Good reading, and nothing a spreadsheet could sort.
-
-## Limits, by design
-
-Scout respects `robots.txt` by default, and when a site serves a bot-protection challenge
-or returns 401/403/429 it records the gap and moves on. There is no CAPTCHA solving and no
+Scout respects `robots.txt` by default. When a site serves a bot challenge or returns
+401, 403 or 429, it records the gap and moves on. There is no CAPTCHA solving and no
 evasion. It does not log in, use supplied cookies, or scrape LinkedIn.
 
-`SCOUT_RESPECT_ROBOTS=false` turns the robots check off. It changes nothing else — the
-challenge detection, the refusal to log in and the rest of the limits above are not
-conditional on it. Worth knowing before reaching for it: a site that allows crawling can
-still block an unfamiliar client, and that is the firewall talking rather than a rule you
-are bound by, so the switch is often not the thing you actually need.
+For people it records only what the company or a public register publishes, and never
+builds an email address from a pattern. See [docs/data-protection.md](docs/data-protection.md).
 
-For people, Scout records only what the company itself publishes, and never constructs an
-email address from a pattern. See [docs/data-protection.md](docs/data-protection.md).
+Known weaknesses, measured rather than hidden:
+
+- **Corroboration is rare** — 0 to 3% of claims across the runs so far. The machinery
+  works; the agent only finds a second source when it happens to pass one. Chasing them
+  deliberately would cost more per company, which is a product decision, not a bug.
+- **Revenue is usually missing.** It lives in filed accounts as a PDF or iXBRL document,
+  not on any page.
+- **One company at a time.** No concurrency and no resume. 500 companies works but takes
+  a night, and a crash at number 400 means re-running the rest by hand.
+- **Verification catches a fabricated quote, not a misread one.** A real sentence
+  attached to the wrong field passes.
 
 ## Development
 
 ```bash
 uv sync --extra dev
-uv run pytest           # 242 tests, no API key required
-uv run pytest -m live   # a handful that call free public APIs
+uv run pytest           # 279 tests, no API key, no network
+uv run pytest -m live   # a few that call free public APIs
 ```
 
-The test suite deliberately needs no API key: the browser layer, the recording and
-provenance rules, persistence and export are all tested against a local fixture site, so
-a failure is a real bug rather than model behaviour.
+The suite serves a fixture site whose content is only reachable after JavaScript runs,
+so the browser path is tested for real rather than mocked. The dashboard is opened in
+Chromium and clicked through, because nothing else type-checks a template string.
 
-## Roadmap
+Database changes go through Alembic:
 
-| Phase | Scope | State |
-|---|---|---|
-| 1 | CLI vertical slice: browser tools, evidence recording, SQLite, CSV export | **done** |
-| 1b | Cost: prompt caching, cheap-model default, `scout verify` | **done** |
-| 1c | Deep research: planner, branches, source tiers, corroboration, conflicts | **done** |
-| 2 | Batch concurrency and resume — which also parallelises branches | next |
-| 3 | FastAPI + SSE, Next.js dashboard with live agent timeline | not started |
-| 4 | ICP scoring and human review write-back | partial (recording works; no review UI) |
-| 5 | Evaluation harness: the three engines and the model tiers, measured | not started |
-
-### Engines
-
-Scout can read the web three ways, all recording into the same schema so a run of each on
-one company is directly comparable. Which is best is an open question the evaluation set is
-meant to answer, not something asserted here.
-
-| `SCOUT_ENGINE` | How it reads pages |
-|---|---|
-| `browser` | Playwright, through Scout's own seven tools. The default. |
-| `fetch` | No browser at all: server-side `web_search` and `web_fetch` only, i.e. conventional scripted research. |
-| `browser_toolset` | The same Playwright browser behind Anthropic's `browser_toolset_20260801` interface, to test whether its standard vocabulary navigates better than Scout's own. |
+```bash
+uv run alembic revision --autogenerate -m "what changed"
+uv run alembic upgrade head
+```
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT.
