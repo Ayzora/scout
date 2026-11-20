@@ -224,13 +224,13 @@ async function companyView(id) {
       <div><div class="stat-label">Time</div><div class="stat-value">${secs(c.duration_s)}</div></div>
       <div><div class="stat-label">Cost</div><div class="stat-value">${money(c.cost_usd)}</div></div>
     </div>
-    <div class="tabs" id="tabs">
-      <button data-tab="profile">Profile</button>
-      <button data-tab="people">People</button>
-      <button data-tab="evidence">Evidence</button>
-      <button data-tab="trace">Trace</button>
+    <div class="tabs" id="tabs" role="tablist">
+      <button role="tab" data-tab="profile">Profile</button>
+      <button role="tab" data-tab="people">People</button>
+      <button role="tab" data-tab="evidence">Evidence</button>
+      <button role="tab" data-tab="trace">Trace</button>
     </div>
-    <div id="panel"></div>`;
+    <div id="panel" role="tabpanel"></div>`;
 
   const tabs = $('#tabs');
   tabs.addEventListener('click', (e) => {
@@ -495,8 +495,16 @@ function newRunView() {
 /* ------------------------------------------------------------------ routing */
 
 function wireRows() {
+  // A whole row is the target, so it has to behave like a link for a keyboard and
+  // for a screen reader, not only for a mouse.
   document.querySelectorAll('.row-link').forEach((row) => {
-    row.addEventListener('click', () => { location.hash = row.dataset.href; });
+    row.tabIndex = 0;
+    row.setAttribute('role', 'link');
+    const go = () => { location.hash = row.dataset.href; };
+    row.addEventListener('click', go);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+    });
   });
 }
 

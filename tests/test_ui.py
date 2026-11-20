@@ -192,3 +192,46 @@ def test_an_unknown_page_does_not_break_the_shell(page):
     _visit(page, "/nowhere")
     assert "No such page" in page.inner_text("#view")
     assert page.inner_text(".wordmark").strip().startswith("Scout")
+
+
+def test_a_row_can_be_followed_from_the_keyboard(page):
+    """The whole row is the target, so it has to behave like a link without a mouse."""
+    _visit(page, "/")
+    page.focus(".row-link")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(500)
+    assert "/runs/" in page.url
+    assert not page.problems, page.problems
+
+
+def test_the_tabs_are_announced_as_tabs(page):
+    _, cr_id = page.ids
+    _visit(page, f"/companies/{cr_id}")
+    assert page.get_attribute("#tabs", "role") == "tablist"
+    assert page.get_attribute("button[data-tab=profile]", "aria-selected") == "true"
+    assert page.get_attribute("button[data-tab=people]", "aria-selected") == "false"
+
+
+def test_it_reads_on_a_phone(page):
+    """One column, no horizontal scrolling, nothing clipped."""
+    _, cr_id = page.ids
+    page.set_viewport_size({"width": 390, "height": 844})
+    try:
+        _visit(page, f"/companies/{cr_id}")
+        overflow = page.evaluate(
+            "() => document.documentElement.scrollWidth - window.innerWidth"
+        )
+        if overflow > 1:
+            # Name what is sticking out, so the failure is actionable.
+            wide = page.evaluate("""() => {
+              const w = window.innerWidth;
+              return [...document.querySelectorAll('*')]
+                .filter((el) => el.getBoundingClientRect().right > w + 1)
+                .map((el) => `${el.tagName}.${el.className} "${
+                  (el.textContent || '').trim().slice(0, 40)}"`)
+                .slice(0, 6);
+            }""")
+            raise AssertionError(f"{overflow}px of horizontal scroll: {wide}")
+        assert "SMIDSY LTD." in page.inner_text("#view")
+    finally:
+        page.set_viewport_size({"width": 1280, "height": 900})

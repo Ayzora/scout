@@ -8,6 +8,7 @@ without a key, or while another is already going.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -198,3 +199,32 @@ def test_an_unknown_depth_is_refused(client, monkeypatch):
     )
     assert response.status_code == 400
     assert "depth" in response.json()["detail"]
+
+
+# ------------------------------------------------------------- the live stream
+
+
+def test_the_event_stream_sends_the_run_and_then_ends(client):
+    """The dashboard watches a run through this. A finished run should send its
+    state once and close, rather than holding the connection open forever."""
+    run_id, _ = client.ids
+    with client.stream("GET", f"/api/runs/{run_id}/events") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        frames = []
+        for line in response.iter_lines():
+            frames.append(line)
+            if line.startswith("event: end"):
+                break
+    payload = next(f for f in frames if f.startswith("data: "))
+    body = json.loads(payload[len("data: "):])
+    assert body["id"] == run_id
+    assert body["companies"][0]["domain"] == "asiagate.co.uk"
+
+
+def test_the_stream_reports_a_missing_run_rather_than_hanging(client):
+    with client.stream("GET", "/api/runs/9999/events") as response:
+        first = next(
+            line for line in response.iter_lines() if line.startswith("data: ")
+        )
+    assert "no run 9999" in first
