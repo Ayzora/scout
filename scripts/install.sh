@@ -1,51 +1,65 @@
 #!/usr/bin/env bash
-# Scout installer. Idempotent: safe to re-run.
+# Install Scout. Safe to run more than once.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
 
-say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
-fail() { printf '\n\033[31m%s\033[0m\n' "$1" >&2; exit 1; }
+say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+note() { printf '  %s\n' "$*"; }
+die()  { printf '\n\033[31m%s\033[0m\n\n' "$*" >&2; exit 1; }
 
-say "1/5  Checking for uv"
+say "Scout"
+note "$ROOT"
+
+# ---------------------------------------------------------------------- uv
+# uv manages the Python version too, so the system Python is never involved --
+# which matters, because macOS still ships 3.9 and Scout needs 3.12.
 if ! command -v uv >/dev/null 2>&1; then
-  fail "uv is not installed. Install it with:
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-then re-run this script."
+  say "Installing uv"
+  if command -v curl >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+  else
+    die "Neither uv nor curl found. Install uv: https://docs.astral.sh/uv/"
+  fi
+  for candidate in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+    [ -d "$candidate" ] && export PATH="$candidate:$PATH"
+  done
+  command -v uv >/dev/null 2>&1 || die "uv installed but not on PATH. Open a new shell and run this again."
 fi
-echo "     uv $(uv --version | awk '{print $2}')"
+note "uv $(uv --version | awk '{print $2}')"
 
-say "2/5  Installing Python dependencies"
-# uv fetches a suitable Python itself; the system Python is not used.
+# ----------------------------------------------------------------- packages
+say "Installing Python $(grep -o '>=3\.[0-9]*' pyproject.toml | head -1 | tr -d '>=') and the packages"
 uv sync --extra dev
 
-say "3/5  Installing the Chromium browser for Playwright"
+# ------------------------------------------------------------------ browser
+# One Chromium, downloaded once, used by the browser engine and by verification.
+say "Installing Chromium for Playwright"
 uv run playwright install chromium
 
-say "4/5  Creating configuration"
-if [ -f .env ]; then
-  echo "     .env already exists, leaving it alone"
-else
+# ----------------------------------------------------------------- the .env
+if [ ! -f .env ]; then
+  say "Creating .env"
   cp .env.example .env
-  echo "     wrote .env from .env.example"
+  note "Add your Anthropic API key to $ROOT/.env"
+else
+  note ".env already exists, leaving it alone"
 fi
 
-say "5/5  Initialising the database"
+# -------------------------------------------------------------- the database
+say "Preparing the database"
 uv run scout init
 
-say "Done."
+# ---------------------------------------------------------------------- done
+say "Done"
 cat <<'NEXT'
-Next steps:
+  Add your key:      ANTHROPIC_API_KEY=sk-ant-...   in .env
+  Check the setup:   uv run scout doctor
+  Open the app:      uv run scout serve
+  Or research one:   uv run scout research -d example.com \
+                       --objectives "who runs it and what they sell"
 
-  1. Put your Anthropic API key in .env
-         ANTHROPIC_API_KEY=sk-ant-...
-     You pay your own API usage. Check your configuration with:
-         uv run scout config
-
-  2. Research a company:
-         uv run scout research --domain example.com \
-           --objectives "What do they sell and who runs the company?"
-
-  3. Export the results:
-         uv run scout export --run 1 -o results.csv
+  Nothing is sent anywhere except the research itself, and the only cost is
+  the Anthropic API. A company runs about 2 minutes and 4 pence.
 NEXT

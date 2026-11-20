@@ -25,3 +25,7 @@ web/out/
 # Exported results
 results.csv
 *.results.csv
+
+# Build artefacts
+dist/
+build/
