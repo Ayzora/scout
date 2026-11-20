@@ -132,6 +132,18 @@ so it cannot introduce a claim that no page supported.
 stored quote against the rendered text. It uses no model, so it costs nothing and can run
 after every research run. On a real run: 45 verbatim, 2 paraphrased, 0 fabricated.
 
+## The output is one row, with fixed columns
+
+Every company exports the same columns — `legal_name`, `registration_number`,
+`employee_count`, `revenue` and the rest — whatever the agent happened to call a field
+while researching. Each column carries a second column saying which hosts it came from,
+and a tick where two independent sources agree. Findings that fit no column are kept in
+`extras_json` rather than dropped, so a gap in the vocabulary is visible in the output.
+
+That matters more than it sounds. Before this, three runs on one company recorded the
+same fact as `identifier_ods_code`, `registration_number (Companies House)` and
+`total_headcount_2025_26_narrative`. Good reading, and nothing a spreadsheet could sort.
+
 ## Limits, by design
 
 Scout respects `robots.txt` by default, and when a site serves a bot-protection challenge
@@ -151,7 +163,7 @@ email address from a pattern. See [docs/data-protection.md](docs/data-protection
 
 ```bash
 uv sync --extra dev
-uv run pytest           # 201 tests, no API key required
+uv run pytest           # 242 tests, no API key required
 uv run pytest -m live   # a handful that call free public APIs
 ```
 

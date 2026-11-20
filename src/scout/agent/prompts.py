@@ -7,6 +7,8 @@ varies goes in the first user message instead.
 
 from __future__ import annotations
 
+from scout.profile import BY_NAME, CORE_COLUMNS, describe_columns
+
 _JOB = """\
 You are Scout, a research agent that investigates companies on the open web.
 
@@ -75,6 +77,25 @@ Two limits you cannot work around, and should not pretend otherwise:
 When either applies, record the field with `mark_unknown` and say which limit stopped you.
 Do not guess at what the page probably said, and do not invent a URL you have not fetched.
 """
+
+_FIELD_NAMES = """\
+# Field names
+
+Use these names exactly. They are the columns of the output, the same for every
+company, and a name invented for one run -- `total_headcount_2025_26`,
+`registration_number (Companies House)` -- cannot be compared against anything.
+
+{columns}
+
+Do not add the year, the source or the qualifier to the name: put those in the value,
+where they belong. `employee_count` is "7,350 as at 31 March 2026", not
+`total_headcount_2025_26`.
+
+If something genuinely worth recording fits none of these, use a short plain name for
+it. It is kept and reported separately rather than discarded -- but check the list
+first, because almost everything fits one of them.
+"""
+
 
 _RULES = """\
 # Recording what you find
@@ -205,6 +226,10 @@ _HOW_TO_WORK = {
 }
 
 
+def _field_names_section() -> str:
+    return _FIELD_NAMES.format(columns=describe_columns())
+
+
 def system_prompt(engine: str) -> str:
     """The system prompt for one engine, and the cached prefix for its runs.
 
@@ -217,7 +242,7 @@ def system_prompt(engine: str) -> str:
         raise ValueError(
             f"unknown engine {engine!r}; expected one of {', '.join(_HOW_TO_WORK)}"
         ) from None
-    return f"{_JOB}\n{how}\n{_RULES}"
+    return f"{_JOB}\n{how}\n{_field_names_section()}\n{_RULES}"
 
 
 SYSTEM_PROMPT = system_prompt("browser")
@@ -239,24 +264,14 @@ def _as_url(domain: str) -> str:
 
 # Kept small on purpose: the agent chases whatever it is given, and every field costs
 # tokens. Anything beyond who they are and what they sell should be asked for.
-CORE_FIELDS = [
-    "company_name",
-    "website",
-    "industry",
-    "products_services",
-]
+# One vocabulary, defined once in scout.profile and used by the prompt, the merge and
+# the export alike. Three runs on one company produced `identifier_ods_code`,
+# `total_headcount_2025_26_narrative` and `registration_number (Companies House)` --
+# each a fair name for what it held, none of them a column anything could sort.
+CORE_FIELDS = list(CORE_COLUMNS)
 
 # The old default, now opt-in: `--fields full`, or name the fields you want.
-FULL_PROFILE_FIELDS = [
-    *CORE_FIELDS,
-    "headquarters_location",
-    "business_activities",
-    "company_size",
-    "geographic_presence",
-    "target_markets",
-    "technology_signals",
-    "recent_developments",
-]
+FULL_PROFILE_FIELDS = list(BY_NAME)
 
 DEFAULT_FIELDS = CORE_FIELDS
 

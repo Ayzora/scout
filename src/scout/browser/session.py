@@ -327,13 +327,22 @@ class BrowserSession:
         self._robots = RobotsCache(enabled=self.respect_robots)
 
     def __enter__(self) -> "BrowserSession":
-        self.start()
         return self
 
     def __exit__(self, *exc) -> None:
         self.close()
 
     def start(self) -> None:
+        """Launch Chromium. Idempotent, and called on first use rather than up front.
+
+        Pages are read over plain HTTP first and only reopened in a browser when that
+        comes back blocked or empty, so a run can finish without ever needing one. A
+        window launched at the start of every run and left on about:blank is a second
+        or two wasted, a confusing thing to watch, and -- for a headed run -- a claim
+        about what the agent is doing that is not true.
+        """
+        if self._page is not None:
+            return
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=not self.headed)
@@ -343,6 +352,10 @@ class BrowserSession:
         )
         context.set_default_timeout(self.timeout_ms)
         self._page = context.new_page()
+
+    @property
+    def started(self) -> bool:
+        return self._page is not None
 
     def close(self) -> None:
         for closer in (
@@ -360,8 +373,10 @@ class BrowserSession:
 
     @property
     def page(self) -> Page:
+        """The live page, launching the browser if this is the first thing to need it."""
         if self._page is None:
-            raise RuntimeError("BrowserSession is not started")
+            self.start()
+        assert self._page is not None
         return self._page
 
     @property
