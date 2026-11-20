@@ -96,6 +96,7 @@ a:hover { color: var(--accent); }
 
 .masthead-meta {
   margin-left: auto;
+  overflow-wrap: anywhere;
   font: 0.75rem/1.4 var(--mono);
   color: var(--ink-faint);
   text-align: right;
@@ -164,6 +165,10 @@ tbody tr:hover { background: var(--paper-sunk); }
 td.num, th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.right, th.right { text-align: right; padding-right: 0; }
 .row-link { cursor: pointer; }
+.row-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+a:focus-visible, button:focus-visible, .tabs button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 .row-link td:first-child { font-weight: 500; }
 
 /* -------------------------------------------------------------- the profile */
@@ -361,6 +366,9 @@ button.quiet:hover { color: var(--accent); border-color: var(--accent); backgrou
 .colophon {
   display: flex;
   gap: 1.5rem;
+  /* A database path has no spaces in it and will happily push the page sideways. */
+  overflow-wrap: anywhere;
+  min-width: 0;
   padding: 1rem var(--gutter) 2rem;
   border-top: 1px solid var(--rule);
   font: 0.72rem/1.5 var(--mono);
@@ -371,6 +379,11 @@ button.quiet:hover { color: var(--accent); border-color: var(--accent); backgrou
 .live { display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 50%;
         background: var(--flag); margin-right: 0.4rem; animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .live { animation: none; }
+  * { transition: none !important; }
+}
 
 @media (max-width: 760px) {
   :root { --gutter: 1.1rem; }
