@@ -385,6 +385,8 @@ def show(
 
         _print_qualification(cr.qualification)
 
+        _print_profile(cr)
+
         table = Table("field", "kind", "value", "source")
         for f in cr.findings:
             table.add_row(
@@ -408,6 +410,44 @@ def show(
 
     _print_branch_tree(settings, company_run)
     _print_assessment(settings, company_run, cr.company.domain)
+
+
+def _print_profile(cr) -> None:
+    """The row this company would export as: fixed columns, same every time.
+
+    Printed before the raw findings because this is the answer; the findings are the
+    working. A column with no value is shown as missing rather than left out, so a gap
+    reads as a gap instead of as an absence of interest.
+    """
+    from scout.export import _finding_rows
+    from scout.profile import CORE_COLUMNS, build_profile, tier_label
+
+    profile = build_profile(_finding_rows(cr.findings), cr.company.domain)
+
+    table = Table("field", "value", "source", "", title=None, show_lines=False)
+    for name, cell in profile.cells.items():
+        core = name in CORE_COLUMNS
+        if not cell.filled and not core:
+            continue
+        label = f"[bold]{name}[/bold]" if core else name
+        if not cell.filled:
+            table.add_row(label, "[dim]— missing[/dim]", "", "")
+            continue
+        mark = "[green]✓[/green]" if cell.corroborated else ""
+        table.add_row(
+            label,
+            cell.as_text()[:70],
+            f"{tier_label(cell.tier)} · {len(cell.sources)}",
+            mark,
+        )
+    console.print(table)
+    console.print(
+        f"  core coverage [bold]{profile.coverage():.0%}[/bold]"
+        + (f" · missing: {', '.join(profile.missing())}" if profile.missing() else "")
+        + (f" · {len(profile.extras)} finding(s) outside the schema"
+           if profile.extras else "")
+        + "   [dim](✓ = two independent sources, one of them primary)[/dim]\n"
+    )
 
 
 _TIER_COLOUR = {

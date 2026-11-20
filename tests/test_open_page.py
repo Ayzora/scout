@@ -171,3 +171,60 @@ def test_a_long_page_is_capped(ctx, fixture_site):
     _, _, tools, _ = ctx
     out = tools["open_page"].call({"url": f"{fixture_site}/long.html"})
     assert len(out) < _FETCH_TEXT_CAP + 1_000
+
+
+def test_the_browser_is_not_launched_until_something_needs_it(tmp_path):
+    """A run can finish without ever opening a browser, so one should not open.
+
+    Observed: Chromium appeared at the start of every run and sat on about:blank,
+    while every page in that run was read over plain HTTP.
+    """
+    with BrowserSession(
+        screenshot_dir=tmp_path / "shots", headed=False, respect_robots=False
+    ) as session:
+        assert not session.started, "entering the session must not launch Chromium"
+        session._robots.allowed("https://example.com/")
+        assert not session.started, "a robots check is not a reason to launch"
+
+
+def test_escalation_launches_it(tmp_path, fixture_site):
+    from scout.agent.recorder import Recorder
+    from scout.agent.tools import build_tools
+    from scout.config import load_settings
+    from scout.db import models as m
+    from scout.db.session import init_db, reset_engine, session_scope
+
+    settings = replace(
+        load_settings(), data_dir=tmp_path, headed=False, engine="browser",
+        respect_robots=False,
+    )
+    reset_engine()
+    init_db(settings)
+    with session_scope(settings) as s:
+        company = m.Company(domain="northwind.example")
+        run = m.Run(model="t", effort="medium", engine="browser")
+        s.add_all([company, run])
+        s.flush()
+        cr = m.CompanyRun(run_id=run.id, company_id=company.id)
+        s.add(cr)
+        s.flush()
+        cr_id = cr.id
+
+    with BrowserSession(
+        screenshot_dir=tmp_path / "shots", headed=False, respect_robots=False
+    ) as browser:
+        recorder = Recorder(settings=settings, company_run_id=cr_id)
+        tools = {t.name: t for t in build_tools(
+            session=browser, recorder=recorder, settings=settings
+        )}
+        tools["open_page"].call({"url": f"{fixture_site}/static.html"})
+        assert not browser.started, "a readable page must not start the browser"
+        tools["open_page"].call({"url": f"{fixture_site}/index.html"})
+        assert browser.started, "a JavaScript page must start it"
+    reset_engine()
+
+
+def test_closing_a_session_that_never_started_is_safe(tmp_path):
+    session = BrowserSession(screenshot_dir=tmp_path / "shots", headed=False)
+    session.close()
+    assert not session.started

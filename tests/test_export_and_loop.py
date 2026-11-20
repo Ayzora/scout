@@ -336,3 +336,65 @@ def test_export_reports_partial_coverage(settings, tmp_path):
     with out.open(encoding="utf-8") as handle:
         row = next(csv.DictReader(handle))
     assert row["evidence_coverage"] == "0.50"
+
+
+# ------------------------------------------------- the exported row is a fixed shape
+
+
+def test_the_csv_has_the_same_columns_whatever_was_found(tmp_path):
+    """The whole point of the schema: two companies, two very different runs, one
+    file you can open in a spreadsheet and sort."""
+    import csv
+    from dataclasses import replace
+
+    from scout.config import load_settings
+    from scout.db import models as m
+    from scout.db.session import init_db, reset_engine, session_scope
+    from scout.export import COLUMNS, export_run_csv
+
+    settings = replace(load_settings(), data_dir=tmp_path)
+    reset_engine()
+    init_db(settings)
+    with session_scope(settings) as s:
+        run = m.Run(model="t", effort="medium", engine="browser")
+        s.add(run)
+        s.flush()
+        for domain, planted in (
+            # Named the way a real run named them, not the way the schema does.
+            ("wmas.nhs.uk", [("identifier_ods_code", '"RYA"'),
+                             ("total_headcount_2025_26", '"7,350"')]),
+            ("acme.com", [("company_name", '"Acme Ltd"'),
+                          ("board_page_date", '"10/04/2026"')]),
+        ):
+            company = m.Company(domain=domain)
+            s.add(company)
+            s.flush()
+            cr = m.CompanyRun(run_id=run.id, company_id=company.id, status="done")
+            s.add(cr)
+            s.flush()
+            for field, value in planted:
+                f = m.Finding(company_run_id=cr.id, field=field, value=value, kind="fact")
+                s.add(f)
+                s.flush()
+                s.add(m.Evidence(finding_id=f.id,
+                                 source_url=f"https://{domain}/x", quote="q"))
+        run_id = run.id
+
+    out = tmp_path / "out.csv"
+    assert export_run_csv(settings, run_id, out) == 2
+
+    rows = list(csv.DictReader(out.open()))
+    assert [r["domain"] for r in rows] == ["wmas.nhs.uk", "acme.com"]
+    for row in rows:
+        assert list(row.keys()) == COLUMNS
+    # Invented names landed in fixed columns...
+    assert rows[0]["registration_number"] == "RYA"
+    assert rows[0]["employee_count"] == "7,350"
+    assert rows[1]["trading_name"] == "Acme Ltd"
+    # ...every column carries where it came from...
+    assert "wmas.nhs.uk" in rows[0]["registration_number__sources"]
+    # ...and what fit no column is still in the file.
+    assert "board_page_date" in rows[1]["extras_json"]
+    assert rows[1]["registration_number"] == ""
+    assert "registration_number" in rows[1]["missing_core_fields"]
+    reset_engine()
