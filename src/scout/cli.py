@@ -262,6 +262,42 @@ def research(
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Interface to bind."),
+    port: int = typer.Option(8000, "--port", "-p"),
+    reload: bool = typer.Option(False, "--reload", help="Restart on code changes."),
+) -> None:
+    """Open the dashboard: runs, profiles, evidence and the agent's trace."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]The dashboard needs uvicorn.[/red] Install it with:\n"
+            "  uv sync    [dim]or[/dim]    pip install 'scout[serve]'"
+        )
+        raise typer.Exit(code=1) from None
+
+    settings = load_settings()
+    init_db(settings)
+    ok, message = schema_is_current(settings)
+    if not ok:
+        console.print(f"[yellow]{message}[/yellow]")
+
+    console.print(
+        f"\n  [bold]Scout[/bold] — http://{host}:{port}\n"
+        f"  [dim]{settings.db_path}[/dim]\n"
+    )
+    uvicorn.run(
+        "scout.api.app:create_app",
+        host=host,
+        port=port,
+        reload=reload,
+        factory=True,
+        log_level="warning",
+    )
+
+
+@app.command()
 def export(
     run: int = typer.Option(..., "--run", help="Run id to export."),
     out: Path = typer.Option(Path("results.csv"), "--out", "-o"),
