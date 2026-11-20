@@ -247,3 +247,37 @@ def test_a_caveat_in_the_name_does_not_become_the_heading(page):
     assert page.inner_text("h1").strip() == "Beryl"
     # The full value, caveat included, is still shown where it belongs.
     assert "site header reads BERYL.CC" in page.inner_text("#panel")
+
+
+@pytest.mark.parametrize("width", [390, 1024, 1280, 1440, 1728])
+def test_the_column_is_centred_at_every_width(page, width):
+    """A max-width with no auto margin pins the column to the left and dumps the
+    whole surplus on the right. At 1728px that was 612px of nothing on one side and
+    a 36px gutter on the other, which is what it looked like."""
+    _, cr_id = page.ids
+    page.set_viewport_size({"width": width, "height": 900})
+    try:
+        _visit(page, f"/companies/{cr_id}")
+        gaps = page.evaluate(
+            """() => {
+              const right = [...document.querySelectorAll('.profile-aside')]
+                .map((e) => e.getBoundingClientRect().right);
+              const left = [...document.querySelectorAll('.profile-field')]
+                .map((e) => e.getBoundingClientRect().left);
+              return {
+                left: Math.round(Math.min(...left)),
+                right: Math.round(window.innerWidth - Math.max(...right)),
+                wordmark: Math.round(
+                  document.querySelector('.wordmark').getBoundingClientRect().left),
+                overflow: Math.round(
+                  document.documentElement.scrollWidth - window.innerWidth),
+              };
+            }"""
+        )
+        assert abs(gaps["left"] - gaps["right"]) <= 2, gaps
+        assert gaps["left"] >= 16, f"gutter too tight: {gaps}"
+        # The masthead shares the column, so the wordmark sits over the first field.
+        assert abs(gaps["wordmark"] - gaps["left"]) <= 2, gaps
+        assert gaps["overflow"] <= 1, gaps
+    finally:
+        page.set_viewport_size({"width": 1280, "height": 900})

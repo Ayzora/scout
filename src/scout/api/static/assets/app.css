@@ -22,7 +22,8 @@
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 
-  --gutter: 2.25rem;
+  --gutter: 3rem;
+  --content: 72rem;
   --measure: 40rem;
 }
 
@@ -61,11 +62,18 @@ a:hover { color: var(--accent); }
 
 /* ---------------------------------------------------------------- masthead */
 
+.masthead,
+.view,
+.colophon {
+  /* Grows to centre the column on a wide screen, never below the gutter. */
+  padding-inline: max(var(--gutter), calc((100% - var(--content)) / 2));
+}
+
 .masthead {
   display: flex;
   align-items: baseline;
   gap: 1.75rem;
-  padding: 1.4rem var(--gutter) 0.9rem;
+  padding-block: 1.4rem 0.9rem;
   border-bottom: 1px solid var(--rule-firm);
   position: sticky;
   top: 0;
@@ -107,7 +115,7 @@ a:hover { color: var(--accent); }
 
 /* ------------------------------------------------------------------- view */
 
-.view { padding: 2.2rem var(--gutter) 4rem; max-width: 72rem; }
+.view { padding-block: 2.4rem 4.5rem; }
 
 .page-head { margin-bottom: 1.8rem; }
 .page-head h1 {
@@ -411,7 +419,7 @@ button.quiet:hover { color: var(--accent); border-color: var(--accent); backgrou
   /* A database path has no spaces in it and will happily push the page sideways. */
   overflow-wrap: anywhere;
   min-width: 0;
-  padding: 1rem var(--gutter) 2rem;
+  padding-block: 1rem 2rem;
   border-top: 1px solid var(--rule);
   font: 0.72rem/1.5 var(--mono);
   color: var(--ink-faint);
@@ -428,7 +436,7 @@ button.quiet:hover { color: var(--accent); border-color: var(--accent); backgrou
 }
 
 @media (max-width: 760px) {
-  :root { --gutter: 1.1rem; }
+  :root { --gutter: 1.15rem; }
   .masthead { flex-wrap: wrap; gap: 0.9rem 1.2rem; }
   .masthead-meta { margin-left: 0; width: 100%; text-align: left; }
   .profile-row { grid-template-columns: 1fr; gap: 0.25rem; }
