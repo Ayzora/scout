@@ -55,6 +55,85 @@ def init() -> None:
 
 
 @app.command()
+def doctor() -> None:
+    """Check the install: Python, the browser, the key, the database."""
+    import shutil
+    import sys
+
+    settings = load_settings()
+    checks: list[tuple[bool, str, str]] = []
+
+    checks.append(
+        (
+            sys.version_info >= (3, 12),
+            f"Python {sys.version_info.major}.{sys.version_info.minor}",
+            "Scout needs 3.12. `uv sync` installs it without touching system Python.",
+        )
+    )
+
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            path = p.chromium.executable_path
+        has_browser = bool(path) and Path(path).exists()
+    except Exception:
+        has_browser = False
+    checks.append(
+        (
+            has_browser,
+            "Chromium for Playwright",
+            "Install it with: uv run playwright install chromium",
+        )
+    )
+
+    checks.append(
+        (
+            bool(settings.api_key()),
+            "Anthropic API key",
+            "Add ANTHROPIC_API_KEY to .env. Nothing that costs money runs without it.",
+        )
+    )
+
+    db_exists = settings.db_path.exists()
+    checks.append(
+        (db_exists, f"Database at {settings.db_path}", "Create it with: scout init")
+    )
+    if db_exists:
+        ok, message = schema_is_current(settings)
+        checks.append((ok, "Database schema up to date", message or ""))
+
+    try:
+        import uvicorn  # noqa: F401
+
+        checks.append((True, "Dashboard dependencies", ""))
+    except ImportError:
+        checks.append((False, "Dashboard dependencies", "Install with: uv sync"))
+
+    checks.append(
+        (
+            shutil.which("uv") is not None,
+            "uv on PATH",
+            "Not required once installed, but every command in the README uses it.",
+        )
+    )
+
+    console.print()
+    for ok, label, remedy in checks:
+        mark = "[green]ok  [/green]" if ok else "[red]need[/red]"
+        console.print(f"  {mark}  {label}")
+        if not ok and remedy:
+            console.print(f"        [dim]{remedy}[/dim]")
+
+    failed = [c for c in checks if not c[0]]
+    console.print()
+    if failed:
+        console.print(f"  [yellow]{len(failed)} thing(s) to fix.[/yellow]\n")
+        raise typer.Exit(code=1)
+    console.print("  [green]Ready.[/green]  Try: scout serve\n")
+
+
+@app.command()
 def config() -> None:
     """Show the resolved configuration."""
     settings = load_settings()
