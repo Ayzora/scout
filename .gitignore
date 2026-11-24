@@ -29,3 +29,6 @@ results.csv
 # Build artefacts
 dist/
 build/
+
+# Input lists
+leads.csv

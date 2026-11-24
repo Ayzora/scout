@@ -224,25 +224,78 @@ def plan_research(
         raise RuntimeError(
             f"planner returned no parsed output (stop_reason={response.stop_reason})"
         )
-    return normalise_plan(plan, max_branches), getattr(response, "usage", None)
+    return (
+        normalise_plan(plan, max_branches, label=name or domain),
+        getattr(response, "usage", None),
+    )
 
 
-def normalise_plan(plan: ResearchPlan, max_branches: int) -> ResearchPlan:
-    """Enforce the caps in code rather than trusting the prompt.
+# Who runs a company and what the entity is are not optional areas of research --
+# they are what a lead is. Measured: asked for "who runs it by name and role", the
+# planner chose identity, products, financials and signals for one company and left
+# people out, so a run that read the representative's name off the page it was
+# already on recorded nobody. Asking is not enforcing.
+REQUIRED_BRANCHES: tuple[BranchName, ...] = (BranchName.IDENTITY, BranchName.PEOPLE)
+
+_REQUIRED_QUESTIONS = {
+    BranchName.IDENTITY: (
+        "What is the registered legal name, registration number, legal status and "
+        "head office address of the company behind {label}?"
+    ),
+    BranchName.PEOPLE: (
+        "Who runs {label}? Name every director, officer or senior manager the "
+        "company or a public register publishes, with their role."
+    ),
+}
+
+
+def normalise_plan(
+    plan: ResearchPlan, max_branches: int, label: str = "this company"
+) -> ResearchPlan:
+    """Enforce the caps, and the floor, in code rather than trusting the prompt.
 
     The model is asked for at most ``max_branches`` distinct areas. Asking is not
     enforcing: a duplicated area would research the same pages twice and an extra
     branch would spend budget the depth setting did not authorise.
+
+    It is also not enforcing in the other direction. Where there is room, identity
+    and people are added if the planner left them out, because a profile without
+    either is not a lead.
     """
     seen: set[BranchName] = set()
     kept: list[BranchPlan] = []
     for branch in sorted(plan.branches, key=lambda b: b.priority):
-        if branch.name in seen:
+        name = BranchName(branch.name)
+        if name in seen:
             continue
-        seen.add(branch.name)
+        seen.add(name)
         kept.append(branch)
         if len(kept) >= max_branches:
             break
     if not kept:
         raise ValueError("the planner returned no usable branches")
+
+    # Put back what the planner dropped, by displacing the least important optional
+    # area rather than spending more than the depth setting allows.
+    for required in REQUIRED_BRANCHES:
+        if required in seen:
+            continue
+        if len(kept) >= max_branches:
+            droppable = [b for b in kept if BranchName(b.name) not in REQUIRED_BRANCHES]
+            if not droppable:
+                continue
+            kept.remove(max(droppable, key=lambda b: b.priority))
+        kept.append(
+            BranchPlan(
+                name=required.value,
+                question=_REQUIRED_QUESTIONS[required].format(label=label),
+                priority=min(9, max((b.priority for b in kept), default=1) + 1),
+                rationale=(
+                    "Added in code: a company profile without this is not a lead."
+                ),
+            )
+        )
+        seen.add(required)
+
+    kept.sort(key=lambda b: b.priority)
     return ResearchPlan(branches=kept, reasoning=plan.reasoning)

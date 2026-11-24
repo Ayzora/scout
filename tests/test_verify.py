@@ -317,3 +317,67 @@ def test_the_planted_fabrication_still_fails_through_both_routes(run_with_eviden
     by_field = {c.field: c for c in report.checks}
     assert by_field["company_size"].verdict is Verdict.NOT_FOUND
     assert by_field["headquarters_location"].verdict is Verdict.VERBATIM
+
+
+# ------------------------------------------- scripts that do not separate words
+
+
+JP_PAGE = (
+    "株式会社Stay Factory 会社概要 代表者 吉田 弘志 本社所在地 〒556-0005 "
+    "大阪市浪速区日本橋4丁目2番15号 TEL 06-6532-2233（代表） 従業員数 300名 "
+    "業種 国内外における宿泊業、飲食業。被保険者数 118人 法人種別 株式会社"
+)
+
+
+def test_a_japanese_quote_is_matched_by_character_not_by_word():
+    """Measured on a real run: four correct Japanese quotes read as fabricated,
+    because a Japanese sentence splits into one or two "words", so a window measured
+    in words is a window of the whole quote and the scan never aligns."""
+    from scout.verify import written_without_spaces
+
+    quote = "代表者 吉田 弘志"
+    assert written_without_spaces(quote)
+    verdict, ratio = classify(quote, JP_PAGE)
+    assert verdict is Verdict.VERBATIM, ratio
+
+
+@pytest.mark.parametrize(
+    "quote",
+    ["被保険者数 118人", "法人種別 株式会社", "本社所在地 〒556-0005 大阪市浪速区日本橋4丁目2番15号"],
+)
+def test_real_japanese_quotes_pass(quote):
+    assert classify(quote, JP_PAGE)[0] in (Verdict.VERBATIM, Verdict.PARAPHRASE)
+
+
+def test_an_invented_japanese_quote_still_fails():
+    """The window changes; the standard does not."""
+    verdict, ratio = classify("代表者 田中 太郎 資本金 5億円 従業員数 9000名", JP_PAGE)
+    assert verdict is Verdict.NOT_FOUND
+    assert ratio < PARAPHRASE_RATIO
+
+
+def test_a_wrong_number_in_japanese_is_not_waved_through():
+    """The dangerous case, in a script where everything looks similar."""
+    verdict, _ = classify("従業員数 900名", JP_PAGE)
+    assert verdict is not Verdict.VERBATIM
+
+
+def test_english_is_unaffected_by_the_japanese_path():
+    from scout.verify import written_without_spaces
+
+    assert not written_without_spaces(PAGE)
+    assert not written_without_spaces("Headquarters: Coventry, United Kingdom")
+    assert classify("Headquarters: Coventry, United Kingdom", PAGE)[0] is Verdict.VERBATIM
+
+
+def test_a_latin_name_inside_japanese_text_is_still_handled():
+    """Company names stay in Latin script inside an otherwise Japanese page."""
+    assert classify("株式会社Stay Factory", JP_PAGE)[0] is Verdict.VERBATIM
+
+
+def test_an_elided_japanese_quote_is_split_on_length():
+    """A Japanese fragment has too few "words" to pass a word-count filter."""
+    quote = "代表者 吉田 弘志 ... 本社所在地 〒556-0005 大阪市浪速区日本橋4丁目2番15号"
+    assert classify(quote, JP_PAGE)[0] in (Verdict.VERBATIM, Verdict.PARAPHRASE)
+    bad = "代表者 吉田 弘志 ... 本社所在地 東京都千代田区丸の内1丁目1番1号"
+    assert classify(bad, JP_PAGE)[0] is not Verdict.VERBATIM

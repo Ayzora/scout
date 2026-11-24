@@ -20,6 +20,7 @@ counting them as errors.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from enum import Enum
@@ -44,6 +45,10 @@ _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _MD_HEADING = re.compile(r"(?m)^\s{0,3}#{1,6}\s*")
 _MD_BULLET = re.compile(r"(?m)^\s*[-*+]\s+")
 _MD_EMPHASIS = re.compile(r"(\*\*|__|\*|`)")
+# Japanese, Chinese and Korean are written without spaces between words.
+_CJK = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]"
+)
 # Typographic variants a page renders one way and a model reproduces another.
 _SUBSTITUTIONS = {
     "‘": "'", "’": "'", "‚": "'", "‛": "'",
@@ -62,9 +67,14 @@ class Verdict(str, Enum):
 
 
 def normalise(text: str) -> str:
-    """Lower-case, collapse whitespace, and fold typographic variants."""
+    """Lower-case, collapse whitespace, and fold typographic and width variants.
+
+    NFKC folds full-width Latin and digits to ASCII, which Japanese pages mix freely:
+    ４丁目２番１５号 and 4丁目2番15号 are the same address written two ways.
+    """
     for bad, good in _SUBSTITUTIONS.items():
         text = text.replace(bad, good)
+    text = unicodedata.normalize("NFKC", text)
     return _WS.sub(" ", text).strip().lower()
 
 
@@ -105,16 +115,39 @@ def _segments(quote: str) -> list[str]:
     the page, but they need not be adjacent.
     """
     parts = [p.strip() for p in _ELLIPSIS.split(quote)]
-    # Fragments too short to be distinctive match almost anything.
-    return [p for p in parts if len(p.split()) >= 3] or [quote]
+
+    def distinctive(part: str) -> bool:
+        # Fragments too short to be distinctive match almost anything. In a script
+        # without spaces, length is the only measure of that available.
+        if written_without_spaces(part):
+            return len(part) >= 6
+        return len(part.split()) >= 3
+
+    return [p for p in parts if distinctive(p)] or [quote]
+
+
+def written_without_spaces(text: str) -> bool:
+    """Whether this text is in a script that does not separate words with spaces.
+
+    Japanese is the case that forced this. A Japanese sentence splits into one or two
+    "words", so a window measured in words is a window of the whole quote, and the
+    scan never aligns: four correct quotes on a Japanese company read as fabricated.
+    """
+    if not text:
+        return False
+    return len(_CJK.findall(text)) >= max(4, len(text) // 4)
 
 
 def best_match_ratio(quote: str, page: str) -> float:
     """Similarity of the quote to the most similar same-length run of page text.
 
     Comparing against the whole page would wash out a short quote, so this slides a
-    window of roughly the quote's length and keeps the best score.
+    window of roughly the quote's length and keeps the best score. The window is
+    measured in words, or in characters where the script does not use spaces.
     """
+    if written_without_spaces(quote) or written_without_spaces(page):
+        return _best_match_by_character(quote, page)
+
     q_words = quote.split()
     p_words = page.split()
     if not q_words or not p_words:
@@ -134,6 +167,25 @@ def best_match_ratio(quote: str, page: str) -> float:
         matcher.set_seq2(window)
         # real_quick_ratio and quick_ratio are cheap upper bounds; skip windows that
         # cannot beat the best score so far.
+        if matcher.real_quick_ratio() <= best or matcher.quick_ratio() <= best:
+            continue
+        best = max(best, matcher.ratio())
+    return best
+
+
+def _best_match_by_character(quote: str, page: str) -> float:
+    """The same sliding scan, stepped in characters rather than words."""
+    if not quote or not page:
+        return 0.0
+    width = len(quote)
+    if width >= len(page):
+        return SequenceMatcher(None, quote, page).ratio()
+
+    step = max(1, width // 4)
+    matcher = SequenceMatcher(None, quote, "", autojunk=False)
+    best = 0.0
+    for start in range(0, len(page) - width + 1, step):
+        matcher.set_seq2(page[start : start + width])
         if matcher.real_quick_ratio() <= best or matcher.quick_ratio() <= best:
             continue
         best = max(best, matcher.ratio())

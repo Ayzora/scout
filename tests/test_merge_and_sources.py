@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from scout.agent.merge import (
     SAME_VALUE_OVERLAP,
+    is_refinement,
     is_single_valued,
     merge_findings,
     normalise_value,
@@ -349,3 +350,68 @@ def test_two_aggregators_still_do_not_corroborate_each_other():
          "source_url": "https://www.crunchbase.com/organization/x", "source_tier": None},
     ]
     assert not merge_findings(rows, company_domain="x.com").claims[0].corroborated
+
+
+# ------------------------------------------------- scripts written at two widths
+
+
+def test_a_register_confirming_a_company_name_corroborates_it():
+    """Japanese registers write Latin names full-width: the corporate register has
+    株式会社ｓｔａｙ ｆａｃｔｏｒｙ where the company's own page has 株式会社Stay
+    Factory. Measured: both were recorded and nothing corroborated, because they
+    compared as two different claims."""
+    rows = [
+        {"field": "legal_name", "value": "株式会社Stay Factory", "kind": "fact",
+         "source_url": "https://www.stayfactory.jp/company/"},
+        {"field": "legal_name", "value": "株式会社ｓｔａｙ ｆａｃｔｏｒｙ", "kind": "fact",
+         "source_url": "https://info.gbiz.go.jp/hojin/ichiran?hojinBango=5120001238837"},
+    ]
+    claim = merge_findings(rows, company_domain="stayfactory.jp").claims[0]
+    assert claim.source_count == 2
+    assert claim.corroborated
+
+
+def test_an_address_written_at_two_widths_is_one_address():
+    assert values_agree(
+        "大阪市浪速区日本橋4丁目2番15号", "大阪市浪速区日本橋４丁目２番１５号"
+    )
+
+
+def test_folding_width_does_not_merge_two_different_companies():
+    assert not values_agree("株式会社Stay Factory", "株式会社Ｏｔｈｅｒ Ｆａｃｔｏｒｙ")
+
+
+def test_a_different_street_number_is_still_a_different_address():
+    """Digits must still match: folding width must not fold values together."""
+    assert not values_agree(
+        "日本橋4丁目2番15号", "日本橋４丁目２番１６号"
+    )
+
+
+def test_two_spellings_of_one_japanese_address_are_not_a_conflict():
+    """Measured: the company's own page gave 〒556-0005 大阪市浪速区日本橋4丁目2番15号
+    and the corporate register gave 大阪府大阪市浪速区日本橋４丁目２番１５号. The same
+    place, a postcode on one and a prefecture on the other, reported as a
+    contradiction because a Japanese address is one long token with no shared words."""
+    assert is_refinement(
+        "〒556-0005 大阪市浪速区日本橋4丁目2番15号",
+        "大阪府大阪市浪速区日本橋４丁目２番１５号",
+    )
+
+
+def test_a_different_building_number_is_still_a_conflict():
+    """The point of the whole step: do not quietly agree two different places."""
+    assert not is_refinement(
+        "大阪市浪速区日本橋4丁目2番15号", "大阪市浪速区日本橋4丁目2番16号"
+    )
+
+
+def test_two_unrelated_japanese_addresses_are_not_a_refinement():
+    assert not is_refinement(
+        "東京都千代田区丸の内1丁目1番1号", "大阪市浪速区日本橋4丁目2番15号"
+    )
+
+
+def test_the_english_refinement_rule_is_untouched():
+    assert is_refinement("London HQ", "London, UK (near Liverpool Street station)")
+    assert not is_refinement("140 employees", "4,000 employees")

@@ -74,7 +74,11 @@ def test_a_repeated_area_is_collapsed():
         reasoning="r",
     )
     kept = normalise_plan(plan, max_branches=6)
-    assert [b.name for b in kept.branches] == [BranchName.PRODUCTS, BranchName.PEOPLE]
+    names = [b.name for b in kept.branches]
+    assert names.count(BranchName.PRODUCTS) == 1
+    assert BranchName.PEOPLE in names
+    # Identity is filled in because there was room; see the required-branch tests.
+    assert BranchName.IDENTITY in names
 
 
 def test_an_empty_plan_is_an_error_not_an_empty_run():
@@ -175,3 +179,109 @@ def test_run_budget_scales_with_depth():
     assert replace(base, depth="shallow").run_budget_tokens == 40_000
     assert replace(base, depth="standard").run_budget_tokens == 160_000
     assert replace(base, depth="deep").run_budget_tokens == 400_000
+
+
+# ------------------------------------------------- what a plan must always contain
+
+
+def _plan(*names, priorities=None):
+    from scout.agent.plan import BranchPlan, ResearchPlan
+
+    priorities = priorities or list(range(1, len(names) + 1))
+    return ResearchPlan(
+        branches=[
+            BranchPlan(name=n, question=f"about {n}?", priority=p, rationale="x")
+            for n, p in zip(names, priorities)
+        ],
+        reasoning="test",
+    )
+
+
+def test_people_is_added_when_the_planner_leaves_it_out():
+    """Measured: asked "who runs it by name and role", the planner chose identity,
+    products, financials and signals, so a run that had the representative's name on
+    a page it already read recorded nobody."""
+    from scout.agent.plan import normalise_plan
+
+    out = normalise_plan(
+        _plan("identity", "products", "financials", "signals"), max_branches=4,
+        label="Stay Factory",
+    )
+    names = [b.name for b in out.branches]
+    assert "people" in names
+    assert "identity" in names
+    assert len(out.branches) == 4, "the cap still holds"
+
+
+def test_the_displaced_branch_is_the_least_important_optional_one():
+    from scout.agent.plan import normalise_plan
+
+    out = normalise_plan(
+        _plan("identity", "products", "financials", "signals",
+              priorities=[1, 2, 3, 4]),
+        max_branches=4, label="Acme",
+    )
+    names = [b.name for b in out.branches]
+    assert "signals" not in names, "the lowest-priority optional area goes first"
+    assert "products" in names and "financials" in names
+
+
+def test_a_required_branch_that_is_added_carries_a_real_question():
+    from scout.agent.plan import normalise_plan
+
+    out = normalise_plan(_plan("products"), max_branches=4, label="Stay Factory")
+    people = next(b for b in out.branches if b.name == "people")
+    assert "Stay Factory" in people.question
+    assert "role" in people.question
+    assert people.rationale
+
+
+def test_a_plan_that_already_has_both_is_left_alone():
+    from scout.agent.plan import normalise_plan
+
+    plan = _plan("identity", "people", "products")
+    out = normalise_plan(plan, max_branches=4, label="Acme")
+    assert [b.name for b in out.branches] == ["identity", "people", "products"]
+
+
+def test_room_is_used_before_anything_is_displaced():
+    from scout.agent.plan import normalise_plan
+
+    out = normalise_plan(_plan("products", "signals"), max_branches=4, label="Acme")
+    names = [b.name for b in out.branches]
+    assert set(names) == {"products", "signals", "identity", "people"}
+
+
+def test_the_cap_is_never_exceeded():
+    from scout.agent.plan import normalise_plan
+
+    for cap in (2, 3, 4, 6):
+        out = normalise_plan(
+            _plan("products", "financials", "signals", "market"),
+            max_branches=cap, label="Acme",
+        )
+        assert len(out.branches) <= cap, cap
+
+
+def test_a_two_branch_cap_keeps_both_required_areas():
+    from scout.agent.plan import normalise_plan
+
+    out = normalise_plan(_plan("products", "signals"), max_branches=2, label="Acme")
+    assert {b.name for b in out.branches} == {"identity", "people"}
+
+
+def test_shallow_depth_still_makes_no_planning_call(tmp_path):
+    """One branch cannot hold both required areas, and shallow is the pre-tree
+    behaviour on purpose."""
+    from dataclasses import replace
+
+    from scout.agent.plan import plan_research
+    from scout.config import load_settings
+
+    settings = replace(load_settings(), depth="shallow", data_dir=tmp_path)
+    plan, usage = plan_research(
+        client=None, settings=settings, domain="acme.com", name=None,
+        objectives="who runs it", requested_fields=["legal_name"],
+    )
+    assert usage is None
+    assert len(plan.branches) == 1

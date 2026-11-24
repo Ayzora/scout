@@ -15,7 +15,14 @@ field is recorded with ``mark_unknown`` rather than omitted.
 from __future__ import annotations
 
 import re
+import unicodedata
+from difflib import SequenceMatcher
 from dataclasses import dataclass, field as dc_field
+
+_CJK = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]"
+)
+_DIGIT_RUN = re.compile(r"\d+")
 
 from scout.agent.sources import TIER_COMPANY, TIER_REGISTRY, host_of, source_tier
 
@@ -37,6 +44,11 @@ def normalise_value(value) -> str:
     comparison is on a sorted bag of words.
     """
     text = str(value if value is not None else "")
+    # Japanese registers write Latin names in full-width characters: the corporate
+    # register has 株式会社ｓｔａｙ ｆａｃｔｏｒｙ where the company's own page has
+    # 株式会社Stay Factory. Without folding those to one form, a register confirming
+    # a company's own name reads as two different claims and nothing corroborates.
+    text = unicodedata.normalize("NFKC", text)
     text = _PUNCT.sub(" ", text).lower()
     return " ".join(sorted(_WS.sub(" ", text).strip().split()))
 
@@ -51,6 +63,9 @@ def is_refinement(a, b) -> bool:
 
     Containment of the distinctive words, in either direction, with no clashing numbers.
     """
+    if _written_without_spaces(a) or _written_without_spaces(b):
+        return _is_refinement_without_words(a, b)
+
     wa, wb = set(normalise_value(a).split()), set(normalise_value(b).split())
     if not wa or not wb:
         return False
@@ -64,6 +79,40 @@ def is_refinement(a, b) -> bool:
     if not content:
         return False
     return len(content & long_) / len(content) >= REFINEMENT_OVERLAP
+
+
+def _written_without_spaces(value) -> bool:
+    text = str(value if value is not None else "")
+    return len(_CJK.findall(text)) >= max(4, len(text) // 4)
+
+
+def _is_refinement_without_words(a, b) -> bool:
+    """The same judgement for a script with no word boundaries.
+
+    A Japanese address is one long token, so the word-overlap test above finds no
+    shared words at all and reports two spellings of one address as a contradiction.
+    Measured: 〒556-0005 大阪市浪速区日本橋4丁目2番15号 from the company's own page
+    against 大阪府大阪市浪速区日本橋4丁目2番15号 from the corporate register -- the
+    same place, a postcode on one and a prefecture on the other.
+
+    So: the longest run the two share, against the length of the shorter. Numbers are
+    held to the same standard as everywhere else, by digit run rather than by word.
+    """
+    ca = _WS.sub("", _PUNCT.sub("", unicodedata.normalize("NFKC", str(a or "")))).lower()
+    cb = _WS.sub("", _PUNCT.sub("", unicodedata.normalize("NFKC", str(b or "")))).lower()
+    if not ca or not cb:
+        return False
+    short, long_ = (ca, cb) if len(ca) <= len(cb) else (cb, ca)
+
+    digits_short = set(_DIGIT_RUN.findall(short))
+    digits_long = set(_DIGIT_RUN.findall(long_))
+    if digits_short and not digits_short <= digits_long:
+        return False
+
+    match = SequenceMatcher(None, short, long_, autojunk=False).find_longest_match(
+        0, len(short), 0, len(long_)
+    )
+    return match.size / len(short) >= REFINEMENT_OVERLAP
 
 
 def values_agree(a, b) -> bool:
