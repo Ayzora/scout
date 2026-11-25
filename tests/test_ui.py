@@ -8,6 +8,7 @@ template string would only be found by looking.
 
 from __future__ import annotations
 
+import os
 import socket
 import threading
 from dataclasses import replace
@@ -29,8 +30,14 @@ def _free_port() -> int:
 
 @pytest.fixture(scope="module")
 def server(tmp_path_factory):
-    """A real server over a small, finished run."""
+    """A real server over a small, finished run.
+
+    The key is cleared for the whole module. Without that the page behaves one way
+    on a machine that has one and another way in CI, and the suite passes or fails
+    depending on whose shell it ran in.
+    """
     tmp = tmp_path_factory.mktemp("ui")
+    previous = os.environ.pop("ANTHROPIC_API_KEY", None)
     settings = replace(load_settings(), data_dir=tmp)
     reset_engine()
     init_db(settings)
@@ -99,6 +106,8 @@ def server(tmp_path_factory):
     yield f"http://127.0.0.1:{port}", ids
     uv_server.should_exit = True
     thread.join(timeout=5)
+    if previous is not None:
+        os.environ["ANTHROPIC_API_KEY"] = previous
     reset_engine()
 
 
@@ -180,12 +189,21 @@ def test_the_tabs_switch_without_reloading(page):
     assert not page.problems, page.problems
 
 
+def test_the_form_cannot_be_started_without_a_key(page):
+    """Nothing that costs money should be one click away when it cannot work."""
+    _visit(page, "/new")
+    assert page.get_attribute("#run-form button", "disabled") is not None
+    assert "ANTHROPIC_API_KEY" in page.inner_text("#view")
+
+
 def test_the_new_run_form_refuses_bad_json_before_spending(page):
     _visit(page, "/new")
     page.fill("#domains", "example.com")
     page.fill("#objectives", "who runs it")
     page.fill("#icp", "{not json")
-    page.click("#run-form button")
+    # Submitted rather than clicked: the validation has to hold whatever state the
+    # Start button is in.
+    page.dispatch_event("#run-form", "submit")
     page.wait_for_timeout(300)
     assert "valid JSON" in page.inner_text("#form-error")
 
