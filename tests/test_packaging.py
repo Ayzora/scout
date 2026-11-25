@@ -79,6 +79,40 @@ def test_every_runtime_dependency_the_server_needs_is_declared(pyproject):
         assert package in declared
 
 
+def test_there_is_an_installer_for_windows():
+    """install.sh cannot run on Windows: uv's shell installer is Unix-only."""
+    script = ROOT / "scripts" / "install.ps1"
+    assert script.exists()
+    text = script.read_text()
+    assert "astral.sh/uv/install.ps1" in text, "must use uv's PowerShell installer"
+    assert "playwright install chromium" in text
+    assert "scout init" in text
+
+
+def test_the_windows_installer_does_not_overwrite_an_existing_env():
+    text = (ROOT / "scripts" / "install.ps1").read_text()
+    assert 'if (-not (Test-Path ".env"))' in text
+
+
+def test_ci_covers_every_platform_the_readme_claims(workflows):
+    """Linux-only CI cannot tell you whether macOS or Windows work."""
+    matrix = workflows["test.yml"]["jobs"]["test"]["strategy"]["matrix"]["os"]
+    assert set(matrix) == {"ubuntu-latest", "macos-latest", "windows-latest"}
+    assert workflows["test.yml"]["jobs"]["test"]["strategy"]["fail-fast"] is False
+
+
+def test_ci_runs_the_installers_on_a_machine_with_nothing_on_it(workflows):
+    """The one thing a developer's laptop can never test is a clean machine."""
+    job = workflows["test.yml"]["jobs"]["install-script"]
+    assert set(job["strategy"]["matrix"]["os"]) == {
+        "ubuntu-latest", "macos-latest", "windows-latest"
+    }
+    run = " ".join(s.get("run", "") for s in job["steps"])
+    assert "install.sh" in run and "install.ps1" in run
+    # Installing uv first would mean the installer's own uv step never runs.
+    assert not any("setup-uv" in str(s.get("uses", "")) for s in job["steps"])
+
+
 def test_the_installer_is_executable_and_valid_shell():
     script = ROOT / "scripts" / "install.sh"
     assert script.exists()
