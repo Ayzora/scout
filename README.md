@@ -44,16 +44,31 @@ two runs on the same company. Export to a CRM. Close the tab and it is still the
 
 ## Install
 
+**macOS and Linux**
+
 ```bash
 git clone https://github.com/Ayzora/scout.git
 cd scout
 ./scripts/install.sh
 ```
 
+**Windows** (PowerShell)
+
+```powershell
+git clone https://github.com/Ayzora/scout.git
+cd scout
+.\scripts\install.ps1
+```
+
 The script installs [uv](https://docs.astral.sh/uv/) if you do not have it, uses it to
 fetch Python 3.12 (macOS still ships 3.9, which is too old), installs the packages and
 one Chromium, writes `.env`, and creates the database. Run it twice and it will not
 overwrite anything.
+
+All three platforms are tested on every push: the full suite runs on Ubuntu, macOS and
+Windows, and each installer runs on a clean machine with nothing on it. The one thing
+that is not covered is `SCOUT_HEADED=true` on Windows, because the runners have no
+desktop session.
 
 Put your key in `.env`:
 
@@ -202,7 +217,7 @@ Known weaknesses, measured rather than hidden:
 
 ```bash
 uv sync --extra dev
-uv run pytest           # 279 tests, no API key, no network
+uv run pytest           # 332 tests, no API key, no network
 uv run pytest -m live   # a few that call free public APIs
 ```
 

@@ -2,6 +2,23 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.2.0 — 2026-11-25
+
+Windows support, and proof for the other two.
+
+- `scripts/install.ps1` installs Scout on Windows. The bash installer could not: uv's
+  shell script does not run there.
+- The suite runs on Ubuntu, macOS and Windows on every push, and each installer runs on
+  a clean machine. Before this, only Linux was tested and the rest was assumption.
+- Line endings are pinned so a Windows clone does not rewrite `install.sh` to CRLF,
+  which stops it running under WSL or Git Bash.
+- Tests no longer read files at the platform's default encoding, which on Windows is
+  cp1252 and fails on any file holding a dash or a diamond. The source already had this
+  right; a test now keeps it that way.
+
+Not covered: watching the browser work (`SCOUT_HEADED=true`) on Windows, because the
+CI runners have no desktop session.
+
 ## 0.1.1 — 2026-11-25
 
 The dashboard tests assumed an API key was configured, so they passed on a developer's
