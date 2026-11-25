@@ -1,0 +1,15 @@
+# Line endings are normalised to LF in the repository.
+* text=auto eol=lf
+
+# A shell script with CRLF endings will not run: bash reads the \r as part of the
+# interpreter path and reports "bad interpreter". Git on Windows converts endings on
+# checkout by default, which breaks install.sh for anyone using WSL or Git Bash on a
+# Windows clone.
+*.sh text eol=lf
+
+# PowerShell is happier with native endings on Windows.
+*.ps1 text eol=crlf
+
+*.png binary
+*.jpg binary
+*.ico binary

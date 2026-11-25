@@ -266,3 +266,14 @@ def test_the_source_never_reads_a_file_at_the_platform_default_encoding():
                 if "newline=" not in line and "rb" not in line:
                     offenders.append(f"{path.relative_to(ROOT)}:{n}")
     assert not offenders, f"reads without an explicit encoding: {offenders}"
+
+
+def test_shell_scripts_are_checked_out_with_unix_line_endings():
+    """Git on Windows rewrites endings on checkout by default. A shell script with
+    CRLF will not run at all: bash reads the carriage return as part of the
+    interpreter path and reports a bad interpreter."""
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "*.sh text eol=lf" in attributes
+
+    for script in (ROOT / "scripts").glob("*.sh"):
+        assert b"\r\n" not in script.read_bytes(), f"{script.name} has CRLF endings"
