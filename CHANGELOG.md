@@ -2,6 +2,13 @@
 
 Notable changes, newest first. Versions follow [semantic versioning](https://semver.org).
 
+## 0.1.1 — 2026-11-25
+
+The dashboard tests assumed an API key was configured, so they passed on a developer's
+machine and timed out in CI, where the Start button is correctly disabled. The suite no
+longer behaves differently depending on whose shell it ran in. No change to the tool
+itself.
+
 ## 0.1.0 — 2026-11-25
 
 First release. Scout turns a list of company domains into one row per company,
