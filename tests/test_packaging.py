@@ -122,12 +122,17 @@ def test_the_installer_is_executable_and_valid_shell():
     # install.sh anyway.
     if os.name != "nt":
         assert script.stat().st_mode & 0o111, "install.sh is not executable"
-    if shutil.which("bash") is None:
-        pytest.skip("no bash on this platform")
+    # Not on Windows: the bash on PATH there is the WSL stub, which exits non-zero
+    # with no output when no distribution is installed, and install.sh is not run on
+    # that platform anyway.
+    if os.name == "nt" or shutil.which("bash") is None:
+        pytest.skip("install.sh is not run on this platform")
     result = subprocess.run(
         ["bash", "-n", str(script)], capture_output=True, text=True, timeout=30
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, (
+        f"bash -n exited {result.returncode}\n{result.stdout}\n{result.stderr}"
+    )
 
 
 def test_the_installer_does_not_overwrite_an_existing_env():
