@@ -57,3 +57,8 @@ markers = ["live: calls a real external service"]
 addopts = "-m 'not live'"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pyyaml>=6.0.3",
+]

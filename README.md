@@ -217,6 +217,10 @@ uv run alembic revision --autogenerate -m "what changed"
 uv run alembic upgrade head
 ```
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## Licence
 
 MIT.

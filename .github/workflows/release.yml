@@ -1,0 +1,74 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build from
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --extra dev
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+
+      # A release that does not pass its own tests is not a release.
+      - name: Run the tests
+        run: uv run pytest -q
+
+      - name: Build the wheel and sdist
+        run: uv build
+
+      # The wheel ships the dashboard as package data, which is easy to break
+      # and invisible until someone installs it and gets a blank page.
+      - name: Check the dashboard is in the wheel
+        run: |
+          python - <<'PY'
+          import glob, zipfile, sys
+          wheel = sorted(glob.glob("dist/*.whl"))[-1]
+          names = zipfile.ZipFile(wheel).namelist()
+          need = [
+              "scout/api/static/index.html",
+              "scout/api/static/assets/app.css",
+              "scout/api/static/assets/app.js",
+          ]
+          missing = [n for n in need if n not in names]
+          if missing:
+              sys.exit(f"{wheel} is missing {missing}")
+          print(f"{wheel}: dashboard present")
+          PY
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          generate_release_notes: true
+          draft: false

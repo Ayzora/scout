@@ -160,3 +160,51 @@ def test_the_stylesheet_has_no_characters_that_only_look_like_ascii():
     for line in (STATIC_DIR / "assets" / "app.css").read_text().split("\n"):
         suspect = [c for c in line if 0x0400 <= ord(c) <= 0x04FF]
         assert not suspect, f"Cyrillic look-alike in: {line.strip()}"
+
+
+# ------------------------------------------------------- continuous integration
+
+
+@pytest.fixture(scope="module")
+def workflows() -> dict:
+    import yaml
+
+    out = {}
+    for f in (ROOT / ".github" / "workflows").glob("*.yml"):
+        out[f.name] = yaml.safe_load(f.read_text())
+    return out
+
+
+def test_ci_runs_the_tests_and_installs_the_browser(workflows):
+    """A large part of the suite drives Chromium. CI that skips the browser install
+    reports green on a suite that never ran."""
+    steps = workflows["test.yml"]["jobs"]["test"]["steps"]
+    run = " ".join(s.get("run", "") for s in steps)
+    assert "uv run pytest" in run
+    assert "playwright install" in run and "chromium" in run
+
+
+def test_the_release_runs_the_tests_before_publishing(workflows):
+    steps = workflows["release.yml"]["jobs"]["release"]["steps"]
+    run = " ".join(s.get("run", "") for s in steps)
+    assert "uv run pytest" in run
+    assert "uv build" in run
+
+
+def test_the_release_checks_the_dashboard_is_in_the_wheel(workflows):
+    """Package data is easy to drop and invisible until someone installs it."""
+    steps = workflows["release.yml"]["jobs"]["release"]["steps"]
+    run = " ".join(s.get("run", "") for s in steps)
+    assert "scout/api/static/index.html" in run
+
+
+def test_the_release_fires_on_a_version_tag(workflows):
+    # PyYAML reads a bare `on:` key as the boolean True.
+    triggers = workflows["release.yml"].get("on") or workflows["release.yml"][True]
+    assert "v*" in triggers["push"]["tags"]
+
+
+def test_the_changelog_covers_the_declared_version(pyproject):
+    version = pyproject["project"]["version"]
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    assert f"## {version}" in changelog, f"CHANGELOG has no entry for {version}"
