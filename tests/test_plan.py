@@ -101,14 +101,14 @@ def test_caps_are_enforced_in_code_not_only_asked_for_in_the_prompt():
 
 def test_prompt_contains_the_company_objectives_fields_and_limit():
     prompt = build_planner_prompt(
-        domain="monzo.com",
-        name="Monzo",
+        domain="example.com",
+        name="Example Ltd",
         objectives="What do they sell, and who leads the company?",
         requested_fields=["company_name", "industry"],
         icp={"sector": "fintech"},
         max_branches=4,
     )
-    assert "monzo.com" in prompt and "Monzo" in prompt
+    assert "example.com" in prompt and "Example Ltd" in prompt
     assert "who leads the company" in prompt
     assert "- company_name" in prompt and "- industry" in prompt
     assert "at most 4 branches" in prompt
@@ -149,8 +149,8 @@ def test_shallow_depth_makes_no_api_call():
     plan, usage = plan_research(
         client=Exploding(),
         settings=settings,
-        domain="monzo.com",
-        name="Monzo",
+        domain="example.com",
+        name="Example Ltd",
         objectives="What do they sell?",
         requested_fields=["company_name"],
     )
@@ -198,14 +198,14 @@ def _plan(*names, priorities=None):
 
 
 def test_people_is_added_when_the_planner_leaves_it_out():
-    """Measured: asked "who runs it by name and role", the planner chose identity,
+    """asked "who runs it by name and role", the planner chose identity,
     products, financials and signals, so a run that had the representative's name on
     a page it already read recorded nobody."""
     from scout.agent.plan import normalise_plan
 
     out = normalise_plan(
         _plan("identity", "products", "financials", "signals"), max_branches=4,
-        label="Stay Factory",
+        label="Example Trading",
     )
     names = [b.name for b in out.branches]
     assert "people" in names
@@ -229,9 +229,9 @@ def test_the_displaced_branch_is_the_least_important_optional_one():
 def test_a_required_branch_that_is_added_carries_a_real_question():
     from scout.agent.plan import normalise_plan
 
-    out = normalise_plan(_plan("products"), max_branches=4, label="Stay Factory")
+    out = normalise_plan(_plan("products"), max_branches=4, label="Example Trading")
     people = next(b for b in out.branches if b.name == "people")
-    assert "Stay Factory" in people.question
+    assert "Example Trading" in people.question
     assert "role" in people.question
     assert people.rationale
 

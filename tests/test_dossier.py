@@ -1,7 +1,7 @@
 """What one branch learns, the next one is told.
 
 Branches are separate conversations, which is what makes depth affordable. The price
-is that each starts ignorant and searches for the company again. On the WMAS run that
+is that each starts ignorant and searches for the company again. On one measured run that
 was ten searches at a cent each -- 82% of the bill, against two cents for every token
 of browsing and reasoning in the whole run.
 
@@ -34,7 +34,7 @@ def company_run(tmp_path):
     reset_engine()
     init_db(settings)
     with session_scope(settings) as s:
-        company = m.Company(domain="wmas.nhs.uk")
+        company = m.Company(domain="trust.example.nhs.uk")
         run = m.Run(model="test", effort="medium", engine="browser")
         s.add_all([company, run])
         s.flush()
@@ -63,14 +63,14 @@ def test_an_empty_run_has_an_empty_dossier(company_run):
 
 def test_facts_and_urls_cross_from_one_branch_to_the_next(company_run):
     settings, cr_id = company_run
-    _record(settings, cr_id, "company_name", '"WMAS University NHS Foundation Trust"',
+    _record(settings, cr_id, "company_name", '"Example University NHS Foundation Trust"',
             "https://www.cqc.org.uk/provider/RYA/contact")
     _record(settings, cr_id, "headquarters_address", '"Brierley Hill DY5 1LX"',
             "https://www.cqc.org.uk/provider/RYA/contact")
 
     dossier = read_dossier(settings, cr_id)
     fields = dict(dossier.facts)
-    assert fields["company_name"].startswith("WMAS University")
+    assert fields["company_name"].startswith("Example University")
     assert "DY5 1LX" in fields["headquarters_address"]
     # One URL, cited twice, is one page to go back to.
     assert dossier.urls == ["https://www.cqc.org.uk/provider/RYA/contact"]
@@ -111,7 +111,7 @@ def test_the_dossier_is_capped(company_run):
 
 def test_branch_summaries_are_carried(company_run):
     settings, cr_id = company_run
-    _record(settings, cr_id, "company_name", '"WMAS"', "https://example.com/a")
+    _record(settings, cr_id, "company_name", '"Example Trust"', "https://example.com/a")
     with session_scope(settings) as s:
         s.add(m.Branch(company_run_id=cr_id, name="identity", depth=1,
                        status=m.Status.DONE.value, summary="The legal name is the "
@@ -122,7 +122,7 @@ def test_branch_summaries_are_carried(company_run):
 
 def test_an_unfinished_branch_contributes_no_conclusion(company_run):
     settings, cr_id = company_run
-    _record(settings, cr_id, "company_name", '"WMAS"', "https://example.com/a")
+    _record(settings, cr_id, "company_name", '"Example Trust"', "https://example.com/a")
     with session_scope(settings) as s:
         s.add(m.Branch(company_run_id=cr_id, name="products", depth=1,
                        status=m.Status.RUNNING.value, summary="half done"))
@@ -134,7 +134,7 @@ def test_an_unfinished_branch_contributes_no_conclusion(company_run):
 
 def _brief(dossier):
     return build_branch_brief(
-        domain="wmas.nhs.uk",
+        domain="trust.example.nhs.uk",
         name=None,
         branch=BranchPlan(name=BranchName.PRODUCTS.value, question="What do they sell?",
                           priority=1, rationale="the ask"),
@@ -147,12 +147,12 @@ def _brief(dossier):
 
 def test_the_brief_tells_a_branch_not_to_search_for_what_is_known():
     brief = _brief(Dossier(
-        facts=[("company_name", "WMAS University NHS Foundation Trust")],
+        facts=[("company_name", "Example University NHS Foundation Trust")],
         urls=["https://www.cqc.org.uk/provider/RYA/contact"],
         notes=["identity: the University variant"],
     ))
     assert "Do not spend a search establishing these again" in brief
-    assert "WMAS University NHS Foundation Trust" in brief
+    assert "Example University NHS Foundation Trust" in brief
     assert "cqc.org.uk" in brief
     assert "rather than searching to find it again" in brief
 
@@ -196,7 +196,7 @@ def test_the_handoff_does_not_suppress_a_second_source():
     exactly the work that produced a second source. The brief now has to stop the
     agent *searching* again without stopping it *recording* a confirmation it meets.
     """
-    brief = _brief(Dossier(facts=[("company_name", "WMAS University NHS Trust")]))
+    brief = _brief(Dossier(facts=[("company_name", "Example University NHS Trust")]))
     assert "Do not spend a search establishing these again" in brief
     assert "different" in brief and "record it as a finding" in brief
     assert "Do not go looking for one" in brief

@@ -1,15 +1,10 @@
 """Turn a tree of branch findings into one assessed set of claims.
 
-Branches research independently, so the same fact arrives several times, sometimes
-worded differently and sometimes contradicting itself. This step decides what is
-corroborated, what rests on a single source, and where sources disagree.
-
-No model is involved. Grouping claims and counting sources is arithmetic, and doing it
-in Python means the assessment cannot be talked into existence -- the corroboration
-count on a profile is a fact about the evidence rows, not a judgement.
-
-Nothing is deleted. A single-sourced claim is flagged, exactly as an unestablished
-field is recorded with ``mark_unknown`` rather than omitted.
+Branches research independently, so the same fact arrives several times, worded
+differently and sometimes contradicting itself. Grouping claims and counting sources
+is arithmetic, so no model is involved and the corroboration count is a fact about
+the evidence rather than a judgement. Nothing is deleted; a single-sourced claim is
+flagged.
 """
 
 from __future__ import annotations
@@ -44,10 +39,9 @@ def normalise_value(value) -> str:
     comparison is on a sorted bag of words.
     """
     text = str(value if value is not None else "")
-    # Japanese registers write Latin names in full-width characters: the corporate
-    # register has 株式会社ｓｔａｙ ｆａｃｔｏｒｙ where the company's own page has
-    # 株式会社Stay Factory. Without folding those to one form, a register confirming
-    # a company's own name reads as two different claims and nothing corroborates.
+    # Japanese registers write Latin names in full-width characters, so a register
+    # entry and the company's own page give the same name in two forms. Without
+    # folding them, a register confirming a name reads as an unrelated claim.
     text = unicodedata.normalize("NFKC", text)
     text = _PUNCT.sub(" ", text).lower()
     return " ".join(sorted(_WS.sub(" ", text).strip().split()))
@@ -58,7 +52,7 @@ def is_refinement(a, b) -> bool:
 
     "London HQ" and "London, UK (near Liverpool Street station)" are not rivals; one
     is simply more specific. Treating them as a conflict buries the disagreements that
-    matter, which is what happened on the first real run: every field with a short and
+    matter: every field with a short and
     a long phrasing was reported as a contradiction.
 
     Containment of the distinctive words, in either direction, with no clashing numbers.
@@ -91,9 +85,8 @@ def _is_refinement_without_words(a, b) -> bool:
 
     A Japanese address is one long token, so the word-overlap test above finds no
     shared words at all and reports two spellings of one address as a contradiction.
-    Measured: 〒556-0005 大阪市浪速区日本橋4丁目2番15号 from the company's own page
-    against 大阪府大阪市浪速区日本橋4丁目2番15号 from the corporate register -- the
-    same place, a postcode on one and a prefecture on the other.
+    A postcode on one source and a prefecture on the other make one address look
+    like two, and every character between them is shared.
 
     So: the longest run the two share, against the length of the shorter. Numbers are
     held to the same standard as everywhere else, by digit run rather than by word.

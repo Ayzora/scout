@@ -1,22 +1,8 @@
-"""Scout's Playwright browser behind Anthropic's own browser toolset interface.
+"""Anthropic's browser toolset, executed against Scout's own Playwright session.
 
-The tools Scout defines by hand (`browser_goto`, `browser_snapshot`, ...) and
-`browser_toolset_20260801` are the same idea: give the model page text with stable
-element references instead of pixel coordinates. Scout's snapshot renders
-``[ref=4] <a> Careers -> /careers.html``; the toolset's `read_page` renders
-``link "Careers" [ref_4]``. One is a private invention and the other is the interface
-the model has seen most of, which is a reason to measure them against each other
-rather than to assume either is better.
-
-This is a *client* toolset: Anthropic defines the member names and schemas, and this
-class executes every call against the same `BrowserSession` the hand-written tools use.
-So the snapshot filtering, the screenshots written to disk, the `robots.txt` check and
-the block detection are all unchanged, and the only variable in the comparison is the
-vocabulary the model works in.
-
-Only the members research needs are implemented. The SDK marks the rest disabled and
-never dispatches them, so the unimplemented majority of the 31 costs nothing and cannot
-be called.
+The model sees Anthropic's tool names and shapes; this code still runs every call,
+so the snapshot filtering, the screenshots and the robots check are unchanged. Only
+the research-relevant members are implemented -- the SDK disables the rest.
 """
 
 from __future__ import annotations

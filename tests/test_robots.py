@@ -1,6 +1,6 @@
 """The robots.txt check, and the switch that turns it off.
 
-This file exists because of a real failure. Scout refused to open wmas.nhs.uk for a
+This file exists because of a real failure. Scout refused to open trust.example.nhs.uk for a
 whole run -- three branches, every one of them blocked on their first navigation --
 and the window sat on about:blank while the findings all came from server-side
 fetching. The site's robots.txt says ``Disallow:`` with nothing after it, which means
@@ -83,7 +83,7 @@ def robots_site():
 def test_an_empty_disallow_allows_everything(robots_site):
     """``Disallow:`` with no path is the permissive form, and real sites use it.
 
-    This is wmas.nhs.uk's actual file.
+    This is trust.example.nhs.uk's actual file.
     """
     base, configure = robots_site
     configure(body="User-agent: *\nDisallow:\nCrawl-delay: 10\n")

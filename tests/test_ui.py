@@ -36,7 +36,7 @@ def server(tmp_path_factory):
     init_db(settings)
 
     with session_scope(settings) as s:
-        company = m.Company(domain="beryl.cc")
+        company = m.Company(domain="example.co")
         run = m.Run(label="demo", model="claude-haiku-5-5", effort="medium",
                     engine="browser", status=m.Status.DONE.value,
                     objectives="who runs it and what it sells",
@@ -45,22 +45,22 @@ def server(tmp_path_factory):
         s.flush()
         cr = m.CompanyRun(run_id=run.id, company_id=company.id,
                           status=m.Status.DONE.value, cost_usd=0.0369,
-                          duration_s=187.0, summary="Beryl runs UK bike share.")
+                          duration_s=187.0, summary="Example Co runs UK bike share.")
         s.add(cr)
         s.flush()
         branch = m.Branch(company_run_id=cr.id, name="identity", depth=1,
                           status=m.Status.DONE.value, question="Legal entity?",
-                          cost_usd=0.01, web_searches=0, summary="SMIDSY LTD.")
+                          cost_usd=0.01, web_searches=0, summary="EXAMPLE HOLDINGS LTD.")
         s.add(branch)
         s.flush()
         for field, value, url in (
-            ("legal_name", '"SMIDSY LTD."',
+            ("legal_name", '"EXAMPLE HOLDINGS LTD."',
              "https://find-and-update.company-information.service.gov.uk/company/1"),
             # Recorded the way a real run records it, caveat and all.
-            ("trading_name", '"Beryl (site header reads BERYL.CC)"',
-             "https://beryl.cc/"),
-            ("contact_email", '"hello@beryl.cc"', "https://beryl.cc/contact"),
-            ("board_page_date", '"reviewed 2026"', "https://beryl.cc/about"),
+            ("trading_name", '"Example Co (site header reads EXAMPLE.CO)"',
+             "https://example.co/"),
+            ("contact_email", '"hello@example.co"', "https://example.co/contact"),
+            ("board_page_date", '"reviewed 2026"', "https://example.co/about"),
         ):
             f = m.Finding(company_run_id=cr.id, field=field, value=value,
                           kind="fact", branch_id=branch.id)
@@ -68,20 +68,20 @@ def server(tmp_path_factory):
             s.flush()
             s.add(m.Evidence(finding_id=f.id, source_url=url,
                              quote="a sentence from the page"))
-        person = m.Person(company_run_id=cr.id, name="Philip Ellis", role="Director")
+        person = m.Person(company_run_id=cr.id, name="Jordan Blake", role="Director")
         s.add(person)
         s.flush()
-        s.add(m.Evidence(person_id=person.id, source_url="https://beryl.cc/team",
-                         quote="Philip Ellis"))
+        s.add(m.Evidence(person_id=person.id, source_url="https://example.co/team",
+                         quote="Jordan Blake"))
         s.add(m.Qualification(company_run_id=cr.id, score=72.0, tier="strong",
                               rationale="UK mobility operator.",
                               icp_match={"matched": ["sector"], "missed": []}))
         s.add(m.Step(company_run_id=cr.id, seq=1, type="tool_result",
-                     tool_name="open_page", tool_input={"url": "https://beryl.cc/"},
-                     url="https://beryl.cc/", duration_ms=120))
+                     tool_name="open_page", tool_input={"url": "https://example.co/"},
+                     url="https://example.co/", duration_ms=120))
         s.add(m.Step(company_run_id=cr.id, seq=2, type="tool_result",
                      tool_name="open_page",
-                     tool_input={"url": "https://beryl.cc/app", "escalated": True,
+                     tool_input={"url": "https://example.co/app", "escalated": True,
                                  "reason": "only 300 characters of text"},
                      duration_ms=1900))
         ids = (run.id, cr.id)
@@ -138,7 +138,7 @@ def test_a_run_lists_its_companies(page):
     _, (run_id, _) = page.base, page.ids
     _visit(page, f"/runs/{run_id}")
     body = page.inner_text("#view")
-    assert "beryl.cc" in body
+    assert "example.co" in body
     assert "UK mobility" in body, "the ideal customer should be shown"
 
 
@@ -146,15 +146,15 @@ def test_the_company_is_titled_by_name_not_domain(page):
     """A domain is how you reached a company, not what it is called."""
     _, cr_id = page.ids
     _visit(page, f"/companies/{cr_id}")
-    assert page.inner_text("h1").strip() == "Beryl"
-    assert "beryl.cc" in page.inner_text(".page-head")
+    assert page.inner_text("h1").strip() == "Example Co"
+    assert "example.co" in page.inner_text(".page-head")
 
 
 def test_the_profile_shows_fixed_columns_and_the_verdict(page):
     _, cr_id = page.ids
     _visit(page, f"/companies/{cr_id}")
     body = page.inner_text("#view")
-    assert "legal_name" in body and "SMIDSY LTD." in body
+    assert "legal_name" in body and "EXAMPLE HOLDINGS LTD." in body
     assert "contact_email" in body, "contact details belong in the profile"
     assert "not established" in body, "an empty core column must say so"
     # The tier is upper-cased by the stylesheet, so compare case-insensitively.
@@ -168,7 +168,7 @@ def test_the_tabs_switch_without_reloading(page):
     _visit(page, f"/companies/{cr_id}")
     page.click("button[data-tab=people]")
     page.wait_for_timeout(300)
-    assert "Philip Ellis" in page.inner_text("#panel")
+    assert "Jordan Blake" in page.inner_text("#panel")
     page.click("button[data-tab=evidence]")
     page.wait_for_timeout(300)
     assert "a sentence from the page" in page.inner_text("#panel")
@@ -234,7 +234,7 @@ def test_it_reads_on_a_phone(page):
                 .slice(0, 6);
             }""")
             raise AssertionError(f"{overflow}px of horizontal scroll: {wide}")
-        assert "SMIDSY LTD." in page.inner_text("#view")
+        assert "EXAMPLE HOLDINGS LTD." in page.inner_text("#view")
     finally:
         page.set_viewport_size({"width": 1280, "height": 900})
 
@@ -244,9 +244,9 @@ def test_a_caveat_in_the_name_does_not_become_the_heading(page):
     not in the heading, where it pushes the name off the line."""
     _, cr_id = page.ids
     _visit(page, f"/companies/{cr_id}")
-    assert page.inner_text("h1").strip() == "Beryl"
+    assert page.inner_text("h1").strip() == "Example Co"
     # The full value, caveat included, is still shown where it belongs.
-    assert "site header reads BERYL.CC" in page.inner_text("#panel")
+    assert "site header reads EXAMPLE.CO" in page.inner_text("#panel")
 
 
 @pytest.mark.parametrize("width", [390, 1024, 1280, 1440, 1728])

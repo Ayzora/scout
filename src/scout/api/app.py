@@ -1,16 +1,10 @@
 """The local web server behind the dashboard.
 
-One process, serving JSON and a static page from the same port. There is no separate
-frontend build: the page is plain HTML, CSS and JavaScript, so installing Scout does
-not drag in a Node toolchain, and `scout serve` is the whole story.
+One process serving JSON and a static page from the same port, with no separate
+frontend build. Progress is read from the database rather than pushed from the
+worker, so a run started from the command line shows up here too.
 
-Live progress is read from the database rather than pushed from the worker. That is
-the simpler design and it buys something real: a run started from the command line in
-another terminal shows up in the dashboard too, because the database is the only thing
-either of them trusts.
-
-Nothing here is exposed beyond the loopback interface by default, and there is no
-authentication, because this is a local tool reading a local file.
+Loopback only, and no authentication: this is a local tool reading a local file.
 """
 
 from __future__ import annotations

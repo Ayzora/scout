@@ -1,17 +1,9 @@
 """Run a company's research as several short conversations instead of one long one.
 
-A branch is the ordinary agent loop pointed at one question. Nothing about how it reads
-pages or records evidence differs; what differs is that it stops when its question is
-answered rather than carrying the whole company in its context.
-
-That is the entire reason the tree exists. A single conversation re-reads its own
-history every turn, so its cost grows with the square of its length: ten times the
-depth costs forty times as much. The same work split across branches grows linearly.
-Running them one after another already captures that -- doing them at the same time
-would only save wall-clock, not money.
-
-Each branch gets its own budget and the run has a ceiling, both enforced here rather
-than asked for in a prompt, because a prompt cannot be relied on to stop spending.
+A branch is the ordinary agent loop pointed at one question. A single conversation
+re-reads its own history every turn, so its cost grows with the square of its length;
+the same work split across branches grows linearly. Budgets and the run ceiling are
+enforced here rather than asked for in a prompt.
 """
 
 from __future__ import annotations
@@ -463,8 +455,8 @@ class Dossier:
     Branches are separate conversations on purpose -- that is what makes depth cost
     linearly instead of quadratically. The price is that each one starts ignorant, and
     the first thing an ignorant branch does is search for the company all over again.
-    On the WMAS run that was ten searches for one company, which at a cent each was 82%
-    of the bill while every token of browsing and reasoning came to two cents.
+    On one measured run that was ten searches for a single company: at a cent each,
+    most of the bill, while every token of browsing and reasoning came to two cents.
 
     This is the cheap half of the fix. Anthropic runs ``web_search`` on its own servers,
     so the results never pass through this program and cannot be cached. What can be

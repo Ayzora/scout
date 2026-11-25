@@ -151,8 +151,8 @@ def test_nothing_recorded_is_lost():
 
 
 def test_the_column_a_value_came_from_is_traceable():
-    rows = [_row("identifier_ods_code", "RYA", "https://directory.spineservices.nhs.uk/x")]
-    cell = build_profile(rows, "wmas.nhs.uk").cells["registration_number"]
+    rows = [_row("identifier_ods_code", "ABC", "https://directory.spineservices.nhs.uk/x")]
+    cell = build_profile(rows, "trust.example.nhs.uk").cells["registration_number"]
     assert cell.recorded_as == ["identifier_ods_code"]
 
 

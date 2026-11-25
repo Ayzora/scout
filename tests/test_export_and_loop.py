@@ -361,7 +361,7 @@ def test_the_csv_has_the_same_columns_whatever_was_found(tmp_path):
         s.flush()
         for domain, planted in (
             # Named the way a real run named them, not the way the schema does.
-            ("wmas.nhs.uk", [("identifier_ods_code", '"RYA"'),
+            ("trust.example.nhs.uk", [("identifier_ods_code", '"ABC"'),
                              ("total_headcount_2025_26", '"7,350"')]),
             ("acme.com", [("company_name", '"Acme Ltd"'),
                           ("board_page_date", '"10/04/2026"')]),
@@ -384,15 +384,15 @@ def test_the_csv_has_the_same_columns_whatever_was_found(tmp_path):
     assert export_run_csv(settings, run_id, out) == 2
 
     rows = list(csv.DictReader(out.open()))
-    assert [r["domain"] for r in rows] == ["wmas.nhs.uk", "acme.com"]
+    assert [r["domain"] for r in rows] == ["trust.example.nhs.uk", "acme.com"]
     for row in rows:
         assert list(row.keys()) == COLUMNS
     # Invented names landed in fixed columns...
-    assert rows[0]["registration_number"] == "RYA"
+    assert rows[0]["registration_number"] == "ABC"
     assert rows[0]["employee_count"] == "7,350"
     assert rows[1]["trading_name"] == "Acme Ltd"
     # ...every column carries where it came from...
-    assert "wmas.nhs.uk" in rows[0]["registration_number__sources"]
+    assert "trust.example.nhs.uk" in rows[0]["registration_number__sources"]
     # ...and what fit no column is still in the file.
     assert "board_page_date" in rows[1]["extras_json"]
     assert rows[1]["registration_number"] == ""

@@ -1,20 +1,12 @@
 """Check recorded quotes against the pages they were taken from.
 
-Scout stores a source URL and a supporting quote for every claim, and already warns
-when the agent cites a page it never opened. Nothing until now checked the quote
-itself, which is the failure that matters: a model asked for a source will readily
-produce a reachable URL attached to a sentence that is not on it -- paraphrased,
-misremembered, or carried over from a different page. That looks correct in the output
-and in the CSV.
-
-Verification uses no model, so it is free and can run after every research run. It
-reads the full rendered page rather than the filtered snapshot the agent saw, because
-the quote is a claim about the page, not about our view of it.
+Scout stores a source URL and a supporting quote for every claim. A model asked for
+a source will readily produce a reachable URL attached to a sentence that is not on
+it, and that looks correct in the output. Verification uses no model, so it is free
+and can run after every research run.
 
 Known limit: content that only exists after an interaction has no URL that reproduces
-it, so a quote taken from behind a click cannot be re-verified by loading the URL
-again. Those come back as NOT FOUND and the report says so rather than quietly
-counting them as errors.
+it, so a quote taken from behind a click comes back as NOT FOUND.
 """
 
 from __future__ import annotations
@@ -299,8 +291,7 @@ def _best(quote: str | None, texts: list[str | None]) -> tuple[Verdict, float]:
     HTTP and the browser renders others, and the two differ: markup that becomes
     visible text in one is dropped by the other, and element boundaries fall in
     different places. Checking a quote against only one of them marks correct claims
-    as fabricated -- measured at 77% on a run whose contact details were, on
-    inspection, exactly right.
+    as fabricated.
 
     Taking the best cannot launder an invention. Both texts are the real page, so a
     sentence absent from both is still absent.

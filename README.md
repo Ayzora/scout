@@ -9,19 +9,19 @@ Anthropic API key. There is no account and no hosted service.
 A company costs about **4p and takes about two minutes**.
 
 ```
-legal_name             SMIDSY LTD.
-trading_name           Beryl
-registration_number    07831245            ◆ corroborated
+legal_name             NORTHGATE HOLDINGS LTD.
+trading_name           Northgate
+registration_number    01234567            ◆ corroborated
 legal_status           Private limited company (active)
-headquarters_location  Unit 4.14, The Frames, 1 Phipp St, London EC2A 4PS
+headquarters_location  Unit 4, Lockhurst Lane, Coventry CV6 5NY
 industry               SIC 32300 — Manufacture of sports goods
 founded                Incorporated 1 November 2011
-contact_email          hello@beryl.cc
+contact_email          hello@northgate.example
 people                 4 directors, from the officer register
 ```
 
-Beryl trades as Beryl. The company is SMIDSY Ltd. You would not learn that from the
-domain, and most databases get it wrong.
+The brand and the registered company are often different names, and the domain tells
+you neither. That gap is where most databases are wrong.
 
 ## What makes it different from asking a chatbot
 
@@ -84,9 +84,9 @@ claim with its quote, and a trace of what the agent did.
 ### The command line
 
 ```bash
-uv run scout research -d beryl.cc \
+uv run scout research -d northgate.example \
   --objectives "who runs it, how big, what it sells, what changed recently" \
-  --icp '{"sector": "UK mobility", "size": "50+ staff", "buying_signal": "recent funding"}'
+  --icp '{"sector": "UK manufacturing", "size": "50+ staff", "buying_signal": "recent funding"}'
 ```
 
 Several companies at once:
@@ -151,8 +151,8 @@ two pence.
 challenge, an error, or a shell that only renders in a browser, the page is reopened in
 Chromium automatically. The page decides, not a rule about the host — and the split is
 not where you would guess. Registries, regulators and job boards serve clean HTML.
-Company marketing sites are the JavaScript shells. Monzo's homepage is 479 characters of
-text inside 239KB of markup.
+Company marketing sites are the JavaScript shells: one measured homepage held 479
+characters of text inside 239KB of markup.
 
 **Claims are recorded as they are seen**, with the URL and quote, while the page is
 still open. A model asked to produce its sources afterwards invents plausible ones.

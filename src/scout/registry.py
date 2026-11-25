@@ -1,23 +1,8 @@
-"""Statutory registers, asked directly instead of searched for.
+"""Statutory registers, queried directly rather than searched for.
 
-The source hierarchy already says a registry outranks a company's own description of
-itself. Until now that ranking was only used to *grade* evidence after it was
-collected -- nothing told the agent to go and get a tier-1 source, so it searched the
-open web for facts that a register will simply hand over.
-
-The cost case is sharper than the quality one. A web search is billed per request, and
-on a measured run ten of them came to 82% of the bill while every token of browsing
-and reasoning came to two cents. A registry lookup is free, exact, and replaces both a
-search and a page read.
-
-The WMAS run is the case in point. It marked `registration_number` unknown after
-spending searches on it. The free NHS directory answers in one call, and distinguishes
-the live entity from the dissolved one carrying the old name -- which is the error the
-commercial database made on the same company.
-
-Nothing here needs a key except Companies House, and when that key is absent this
-hands back the public URL rather than guessing: a wrong registration number is worse
-than an honest gap.
+A register is the strongest source for legal identity, and asking one costs nothing
+where a web search is billed per request. Companies House needs a key; without one
+this returns the public search URL rather than guessing a company number.
 """
 
 from __future__ import annotations

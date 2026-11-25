@@ -176,7 +176,7 @@ def test_a_long_page_is_capped(ctx, fixture_site):
 def test_the_browser_is_not_launched_until_something_needs_it(tmp_path):
     """A run can finish without ever opening a browser, so one should not open.
 
-    Observed: Chromium appeared at the start of every run and sat on about:blank,
+    Chromium appeared at the start of every run and sat on about:blank,
     while every page in that run was read over plain HTTP.
     """
     with BrowserSession(

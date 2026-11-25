@@ -1,25 +1,9 @@
 """Read a page over plain HTTP, and judge whether that was enough.
 
-The browser is the only thing that works on a site built as a JavaScript shell, and it
-is dead weight on a page that serves its content as HTML. Which of those a page is
-cannot be predicted from its host -- it has to be observed, and observing it is cheap.
-
-Measured on real pages, raw HTTP text against browser-rendered text:
-
-    monzo.com                      479 chars of   239,227  ratio 0.05 of rendered
-    oxwash.com                     refused the request outright
-    wmas.nhs.uk                  4,584 chars              ratio 0.67
-    Companies House officers     9,827 chars              ratio 1.03
-    CQC provider page            4,985 chars              ratio 1.97
-    Greenhouse job board         4,180 chars              ratio 1.03
-
-The split is not where it looks. Registries, regulators and job boards -- the sources
-worth corroborating against -- serve clean HTML. The company marketing sites are the
-JavaScript shells. So the rule is per page, not per host, and the page itself says
-which it is: 479 characters out of 239KB of HTML is not a page anyone could read.
-
-This module makes that judgement and nothing else. It does not decide policy; the
-caller decides what to do with ``escalate``.
+A browser is required for a page that renders itself with JavaScript and is dead
+weight on one that serves HTML. Which it is cannot be told from the host, so it is
+measured from the response: a page that returns almost no text for its size, a bot
+challenge, or an error, is reopened in a browser.
 """
 
 from __future__ import annotations

@@ -43,8 +43,8 @@ PAGE = (
 def test_normalise_folds_typography_and_whitespace():
     assert normalise("  Hello   World  ") == "hello world"
     # A page renders curly quotes and em dashes; a model reproduces straight ones.
-    assert normalise("Monzo’s “Flex” — now") == normalise(
-        "Monzo's \"Flex\" - now"
+    assert normalise("Acme’s “Flex” — now") == normalise(
+        "Acme's \"Flex\" - now"
     )
     assert normalise("non breaking") == "non breaking"
 
@@ -102,7 +102,7 @@ def test_unrelated_prose_of_similar_length_scores_below_the_threshold():
 def test_snapshot_formatting_is_stripped_before_matching():
     """The agent quotes what it was shown, and a snapshot line carries our markup.
 
-    A real case: the agent quoted a careers listing as
+    the agent quoted a careers listing as
     ``Lead ML Scientist, Cardiff -> https://job-boards.greenhouse.io/...``. The arrow
     and href are this program's rendering, so matching them against page text marked
     an honest quote as fabricated.
@@ -110,7 +110,7 @@ def test_snapshot_formatting_is_stripped_before_matching():
     page = "Lead Machine Learning Scientist, FinCrime Cardiff, London or Remote (UK)"
     quoted_as_shown = (
         "[ref=12] <a> Lead Machine Learning Scientist, FinCrime Cardiff, London or "
-        "Remote (UK) -> https://job-boards.greenhouse.io/monzo/jobs/123"
+        "Remote (UK) -> https://job-boards.example.com/acme/jobs/123"
     )
     assert strip_snapshot_artifacts(quoted_as_shown).startswith("Lead Machine")
     assert classify(quoted_as_shown, page)[0] is Verdict.VERBATIM
@@ -118,15 +118,15 @@ def test_snapshot_formatting_is_stripped_before_matching():
 
 def test_an_elided_quote_passes_only_if_every_part_is_present():
     page = (
-        "LAYFIELD, Diana Louise Patricia. Appointed 02 February 2026. "
+        "HOLLOWAY, Margaret Jane. Appointed 02 February 2026. "
         "Role ACTIVE Director. Nationality British."
     )
-    assert classify("LAYFIELD, Diana Louise Patricia ... Role ACTIVE Director", page)[
+    assert classify("HOLLOWAY, Margaret Jane ... Role ACTIVE Director", page)[
         0
     ] is Verdict.VERBATIM
     # One half real, the other invented, is not a pass.
     verdict, _ = classify(
-        "LAYFIELD, Diana Louise Patricia ... Role RESIGNED Company Secretary", page
+        "HOLLOWAY, Margaret Jane ... Role RESIGNED Company Secretary", page
     )
     assert verdict is not Verdict.VERBATIM
 
@@ -134,14 +134,14 @@ def test_an_elided_quote_passes_only_if_every_part_is_present():
 def test_markdown_from_web_fetch_is_reduced_to_its_words():
     """web_fetch returns pages as Markdown, the browser returns rendered text.
 
-    A real case: the agent quoted "### Products - [Current accounts](https://...)",
+    the agent quoted "### Products - [Current accounts](https://...)",
     which no rendered page contains, and was marked a fabrication for it.
     """
     page = "Products Current accounts Business accounts Savings"
     quoted = (
-        "### Products\n- [Current accounts](https://monzo.com/current-account)\n"
-        "- [Business accounts](https://monzo.com/business-banking)\n"
-        "- [Savings](https://monzo.com/savings-isas)"
+        "### Products\n- [Current accounts](https://example.com/current-account)\n"
+        "- [Business accounts](https://example.com/business-banking)\n"
+        "- [Savings](https://example.com/savings-isas)"
     )
     assert "](" not in strip_markdown(quoted)
     assert classify(quoted, page)[0] in (Verdict.VERBATIM, Verdict.PARAPHRASE)
@@ -323,19 +323,19 @@ def test_the_planted_fabrication_still_fails_through_both_routes(run_with_eviden
 
 
 JP_PAGE = (
-    "株式会社Stay Factory 会社概要 代表者 吉田 弘志 本社所在地 〒556-0005 "
-    "大阪市浪速区日本橋4丁目2番15号 TEL 06-6532-2233（代表） 従業員数 300名 "
+    "株式会社サンプル商会 会社概要 代表者 山田 太郎 本社所在地 〒100-0001 "
+    "東京都千代田区千代田1丁目2番3号 TEL 03-1234-5678（代表） 従業員数 300名 "
     "業種 国内外における宿泊業、飲食業。被保険者数 118人 法人種別 株式会社"
 )
 
 
 def test_a_japanese_quote_is_matched_by_character_not_by_word():
-    """Measured on a real run: four correct Japanese quotes read as fabricated,
+    """four correct Japanese quotes read as fabricated,
     because a Japanese sentence splits into one or two "words", so a window measured
     in words is a window of the whole quote and the scan never aligns."""
     from scout.verify import written_without_spaces
 
-    quote = "代表者 吉田 弘志"
+    quote = "代表者 山田 太郎"
     assert written_without_spaces(quote)
     verdict, ratio = classify(quote, JP_PAGE)
     assert verdict is Verdict.VERBATIM, ratio
@@ -343,7 +343,7 @@ def test_a_japanese_quote_is_matched_by_character_not_by_word():
 
 @pytest.mark.parametrize(
     "quote",
-    ["被保険者数 118人", "法人種別 株式会社", "本社所在地 〒556-0005 大阪市浪速区日本橋4丁目2番15号"],
+    ["被保険者数 118人", "法人種別 株式会社", "本社所在地 〒100-0001 東京都千代田区千代田1丁目2番3号"],
 )
 def test_real_japanese_quotes_pass(quote):
     assert classify(quote, JP_PAGE)[0] in (Verdict.VERBATIM, Verdict.PARAPHRASE)
@@ -351,7 +351,7 @@ def test_real_japanese_quotes_pass(quote):
 
 def test_an_invented_japanese_quote_still_fails():
     """The window changes; the standard does not."""
-    verdict, ratio = classify("代表者 田中 太郎 資本金 5億円 従業員数 9000名", JP_PAGE)
+    verdict, ratio = classify("代表者 鈴木 一郎 資本金 5億円 従業員数 9000名", JP_PAGE)
     assert verdict is Verdict.NOT_FOUND
     assert ratio < PARAPHRASE_RATIO
 
@@ -372,12 +372,12 @@ def test_english_is_unaffected_by_the_japanese_path():
 
 def test_a_latin_name_inside_japanese_text_is_still_handled():
     """Company names stay in Latin script inside an otherwise Japanese page."""
-    assert classify("株式会社Stay Factory", JP_PAGE)[0] is Verdict.VERBATIM
+    assert classify("株式会社サンプル商会", JP_PAGE)[0] is Verdict.VERBATIM
 
 
 def test_an_elided_japanese_quote_is_split_on_length():
     """A Japanese fragment has too few "words" to pass a word-count filter."""
-    quote = "代表者 吉田 弘志 ... 本社所在地 〒556-0005 大阪市浪速区日本橋4丁目2番15号"
+    quote = "代表者 山田 太郎 ... 本社所在地 〒100-0001 東京都千代田区千代田1丁目2番3号"
     assert classify(quote, JP_PAGE)[0] in (Verdict.VERBATIM, Verdict.PARAPHRASE)
-    bad = "代表者 吉田 弘志 ... 本社所在地 東京都千代田区丸の内1丁目1番1号"
+    bad = "代表者 山田 太郎 ... 本社所在地 大阪市北区梅田9丁目9番9号"
     assert classify(bad, JP_PAGE)[0] is not Verdict.VERBATIM

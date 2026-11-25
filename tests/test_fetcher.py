@@ -1,7 +1,7 @@
 """Fetch first, and let the page say whether that was enough.
 
 The rule this file pins is per page, not per host. Measured on real sites, raw HTTP
-text against browser-rendered text: Monzo's homepage gives 479 characters out of
+text against browser-rendered text: Acme's homepage gives 479 characters out of
 239KB of HTML, while Companies House, the CQC and a Greenhouse job board all come back
 complete. The registries worth corroborating against serve clean HTML; the company
 marketing sites are the JavaScript shells. A host rule would get both wrong.
@@ -68,7 +68,7 @@ def test_a_readable_page_is_not_escalated():
 
 
 def test_a_javascript_shell_is_escalated():
-    """Monzo's homepage, to scale: a few hundred characters out of a huge document."""
+    """Acme's homepage, to scale: a few hundred characters out of a huge document."""
     escalate, why = needs_browser(_result(text="a" * 479, html_bytes=239_227))
     assert escalate
     assert "479" in why and "JavaScript" in why

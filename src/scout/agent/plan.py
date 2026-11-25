@@ -1,17 +1,8 @@
-"""Decide what to research before researching it.
+"""Choose which areas of a company to research, in one structured call.
 
-One structured call, no tools, no browser. It turns the objectives into a short list of
-questions, each of which then gets its own conversation.
-
-Planning separately is what makes depth affordable. The expensive part of a run is the
-agentic loop, and a loop that has been handed a decided question wastes none of its
-budget working out what to look for. It also makes the shape of a run inspectable:
-the branch list is stored, so a disappointing profile can be traced to a bad plan
-rather than guessed at.
-
-Branch names come from a fixed taxonomy rather than being free text. A planner inventing
-its own categories would make runs incomparable, and comparing runs is the whole basis
-of the evaluation set.
+Planning is cheap and has no tools, so the expensive agentic loops only ever run
+against a decided question. Identity and people are not optional: a profile without
+either is not a lead, so they are filled in here when the planner omits them.
 """
 
 from __future__ import annotations
@@ -231,7 +222,7 @@ def plan_research(
 
 
 # Who runs a company and what the entity is are not optional areas of research --
-# they are what a lead is. Measured: asked for "who runs it by name and role", the
+# they are what a lead is. asked for "who runs it by name and role", the
 # planner chose identity, products, financials and signals for one company and left
 # people out, so a run that read the representative's name off the page it was
 # already on recorded nobody. Asking is not enforcing.

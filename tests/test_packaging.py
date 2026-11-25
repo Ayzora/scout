@@ -141,7 +141,7 @@ def test_the_readme_documents_every_setting_that_changes_behaviour(readme):
 def test_every_colour_token_is_a_valid_hex_value():
     """A Cyrillic 'e' inside #dce1e2 parses as nothing and the rule is dropped
     silently, which is how a theme loses a third of its hairlines without anyone
-    noticing. Caught once; pinned here."""
+    noticing. Pinned here."""
     import re
 
     from scout.api.app import STATIC_DIR

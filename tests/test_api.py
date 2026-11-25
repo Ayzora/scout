@@ -28,7 +28,7 @@ def client(tmp_path, monkeypatch):
     init_db(settings)
 
     with session_scope(settings) as s:
-        company = m.Company(domain="asiagate.co.uk", name="AsiaGate")
+        company = m.Company(domain="acme.example", name="Acme Trading")
         run = m.Run(
             label="november", model="claude-haiku-5-5", effort="medium",
             engine="browser", status=m.Status.DONE.value,
@@ -50,11 +50,11 @@ def client(tmp_path, monkeypatch):
         s.add(branch)
         s.flush()
         for field, value, url in (
-            ("legal_name", '"ASIAGATE LTD"',
+            ("legal_name", '"ACME TRADING LTD"',
              "https://find-and-update.company-information.service.gov.uk/company/1"),
-            ("registration_number", '"14834017"',
+            ("registration_number", '"00000001"',
              "https://find-and-update.company-information.service.gov.uk/company/1"),
-            ("identifier_ods_code", '"ignored"', "https://asiagate.co.uk/about"),
+            ("identifier_ods_code", '"ignored"', "https://acme.example/about"),
         ):
             f = m.Finding(
                 company_run_id=cr.id, field=field, value=value, kind="fact",
@@ -65,16 +65,16 @@ def client(tmp_path, monkeypatch):
             s.add(m.Evidence(finding_id=f.id, source_url=url, quote="q", source_tier=1))
         s.add(m.Finding(company_run_id=cr.id, field="revenue", value=None,
                         kind="unknown", reason="not published"))
-        person = m.Person(company_run_id=cr.id, name="Philip Soon", role="Director")
+        person = m.Person(company_run_id=cr.id, name="Jordan Blake", role="Director")
         s.add(person)
         s.flush()
-        s.add(m.Evidence(person_id=person.id, source_url="https://find-and-update.company-information.service.gov.uk/company/1/officers", quote="Philip Soon"))
+        s.add(m.Evidence(person_id=person.id, source_url="https://find-and-update.company-information.service.gov.uk/company/1/officers", quote="Jordan Blake"))
         s.add(m.Qualification(company_run_id=cr.id, score=55.0, tier="moderate",
                               rationale="partly", icp_match={"matched": ["sector"],
                                                              "missed": ["signal"]}))
         s.add(m.Step(company_run_id=cr.id, seq=1, type="tool_result",
-                     tool_name="open_page", tool_input={"url": "https://asiagate.co.uk"},
-                     output_summary="Read directly", url="https://asiagate.co.uk",
+                     tool_name="open_page", tool_input={"url": "https://acme.example"},
+                     output_summary="Read directly", url="https://acme.example",
                      duration_ms=92, branch_id=branch.id))
         s.add(m.Step(company_run_id=cr.id, seq=2, type="tool_result",
                      tool_name="open_page",
@@ -123,7 +123,7 @@ def test_a_run_carries_its_companies(client):
     assert body["objectives"] == "who runs it"
     company = body["companies"][0]
     assert company["id"] == cr_id
-    assert company["domain"] == "asiagate.co.uk"
+    assert company["domain"] == "acme.example"
     assert company["facts"] == 3 and company["unknowns"] == 1
     assert company["tier"] == "moderate"
 
@@ -133,8 +133,8 @@ def test_a_company_comes_back_as_fixed_columns(client):
     _, cr_id = client.ids
     body = client.get(f"/api/company-runs/{cr_id}").json()
     fields = {cell["field"]: cell for cell in body["profile"]}
-    assert fields["legal_name"]["value"] == "ASIAGATE LTD"
-    assert fields["registration_number"]["value"] == "14834017"
+    assert fields["legal_name"]["value"] == "ACME TRADING LTD"
+    assert fields["registration_number"]["value"] == "00000001"
     # An invented field name still lands in a column.
     assert fields["registration_number"]["filled"]
     # And an empty column is present rather than absent.
@@ -145,7 +145,7 @@ def test_a_company_comes_back_as_fixed_columns(client):
 def test_a_company_carries_its_evidence_people_and_branches(client):
     _, cr_id = client.ids
     body = client.get(f"/api/company-runs/{cr_id}").json()
-    assert body["people"][0]["name"] == "Philip Soon"
+    assert body["people"][0]["name"] == "Jordan Blake"
     assert body["branches"][0]["name"] == "identity"
     finding = next(f for f in body["findings"] if f["field"] == "legal_name")
     assert finding["evidence"][0]["tier_label"] == "registry"
@@ -219,7 +219,7 @@ def test_the_event_stream_sends_the_run_and_then_ends(client):
     payload = next(f for f in frames if f.startswith("data: "))
     body = json.loads(payload[len("data: "):])
     assert body["id"] == run_id
-    assert body["companies"][0]["domain"] == "asiagate.co.uk"
+    assert body["companies"][0]["domain"] == "acme.example"
 
 
 def test_the_stream_reports_a_missing_run_rather_than_hanging(client):

@@ -1,21 +1,10 @@
 """One row per company, with the same columns every time.
 
-Research produced good reading and unusable data. Three runs on one company recorded
-the same facts under `identifier_ods_code`, `total_headcount_2025_26_narrative`,
-`operational_pressure_handover_delays_march_2026` and `registration_number (Companies
-House)`. Every one of those is a sensible name for what it holds, and no two runs would
-agree on them, so nothing can be sorted, filtered or written into a CRM. Enrichment is
-the same columns for every company or it is prose.
-
-Three things are needed and they are deliberately separate:
-
-* a fixed vocabulary, which the agent is also told, so most findings arrive correct;
-* an alias map, because a prompt is a request and this has to hold anyway;
-* a choice of one value per column, made from the evidence rather than from order.
-
-Nothing is discarded. A finding that matches no column is kept as an extra, and the
-values not chosen are kept as alternates, in the same spirit as recording an unknown
-rather than omitting the field.
+A field name invented per run cannot be sorted, filtered or written to a CRM. Three
+parts, kept separate because they fail differently: a fixed vocabulary the agent is
+also given, an alias map for what arrives under another name, and a choice of one
+value per column made from the evidence. Nothing is discarded -- unmatched findings
+are kept as extras and values not chosen as alternates.
 """
 
 from __future__ import annotations
